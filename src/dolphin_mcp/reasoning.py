@@ -312,7 +312,7 @@ class MultiStepReasoner:
         """
         Asks the LLM to generate arguments for a tool call.
         """
-        self.config.reasoning_trace(f"<think>Asking LLM to generate arguments for tool: {tool_name}</think>")
+        self.config.reasoning_trace(f"<thinking>Asking LLM to generate arguments for tool: {tool_name}</thinking>")
 
         prompt_content = f"""You have decided to call the tool `{tool_name}`.
 Based on the conversation history, please provide the arguments for this tool.
@@ -332,7 +332,7 @@ Please provide *only* the JSON object for the arguments, without any other text 
         args_result = await generate_func(args_conversation, model_cfg, [], stream=False)
         args_text = args_result.get("assistant_text", "").strip()
 
-        self.config.reasoning_trace(f"<think>LLM generated arguments: {args_text}</think>")
+        self.config.reasoning_trace(f"<thinking>LLM generated arguments: {args_text}</thinking>")
 
         # Parse the arguments
         try:
@@ -346,7 +346,7 @@ Please provide *only* the JSON object for the arguments, without any other text 
                 raise json.JSONDecodeError("Not a JSON object", args_text, 0)
             return parsed_args
         except (json.JSONDecodeError, AttributeError) as e:
-            self.config.reasoning_trace(f"<think>Failed to parse arguments for {tool_name}: {e}</think>")
+            self.config.reasoning_trace(f"<error>Failed to parse arguments for {tool_name}: {e}</error>")
             return {"error": "Failed to generate valid JSON arguments.", "raw_response": args_text}
 
     async def generate_plan(self, question: str, guidelines: str, generate_func, model_cfg: Dict, all_functions: List[Dict]) -> str:
@@ -431,13 +431,17 @@ The Guidelines:
         self.python_context = {}
 
         for i in range(self.config.max_iterations):
-            self.config.reasoning_trace(f"<think>Step {i + 1}:</think>")
-
+            self.config.reasoning_trace(f"<thinking_dot>\n<title>Step {i + 1}:</title>\n<content>\n")
+            
             try:
                 # Generate response
                 result = await generate_func(conversation, model_cfg, [], stream=False)
                 assistant_text = result.get("assistant_text", "")
-                self.config.reasoning_trace(f"<think>{assistant_text}</think>")
+
+                final_answer = extract_final_answer(assistant_text)
+
+                if not final_answer:
+                    self.config.reasoning_trace(f"<thinking>{assistant_text}</thinking>")
                 
                 # Add assistant message to conversation
                 assistant_msg = {"role": "assistant", "content": assistant_text}
@@ -447,7 +451,7 @@ The Guidelines:
                 tool_calls = extract_tool_calls(assistant_text)
                 if tool_calls:
                     for tc_data in tool_calls:
-                        self.config.reasoning_trace(f"<think>Processing tool call: {tc_data.get('name', 'unknown')}</think>")
+                        self.config.reasoning_trace(f"<thinking>Processing tool call: {tc_data.get('name', 'unknown')}</thinking>")
                         tool_name = tc_data.get("name")
                         if not tool_name:
                             continue
@@ -456,7 +460,7 @@ The Guidelines:
                         full_function_def = next((f for f in all_functions if f['name'] == tool_name), None)
 
                         if not full_function_def:
-                            error_content = f"<think>Error calling tool {tool_name}: Tool not found.</think>"
+                            error_content = f"<error>Error calling tool {tool_name}: Tool not found.</error>"
                             self.config.reasoning_trace(error_content)
                             conversation.append(
                                 {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -468,7 +472,7 @@ The Guidelines:
                         )
 
                         if "error" in tool_args:
-                            error_content = f"<think>Error calling tool {tool_name}: {tool_args['error']} Raw response: {tool_args['raw_response']}</think>"
+                            error_content = f"<error>Error calling tool {tool_name}: {tool_args['error']} Raw response: {tool_args['raw_response']}</error>"
                             self.config.reasoning_trace(error_content)
                             conversation.append(
                                 {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -479,7 +483,7 @@ The Guidelines:
                         required_params = schema.get("required", [])
                         missing_params = [p for p in required_params if p not in tool_args]
                         if missing_params:
-                            error_content = f"<think>Error calling tool {tool_name}: Missing required parameters after generation: {', '.join(missing_params)}</think>"
+                            error_content = f"<error>Error calling tool {tool_name}: Missing required parameters after generation: {', '.join(missing_params)}</error>"
                             self.config.reasoning_trace(error_content)
                             conversation.append(
                                 {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -489,7 +493,7 @@ The Guidelines:
                         fake_tc = {"id": f"call_{tool_name.replace('.', '_')}_{i}", "function": {"name": tool_name, "arguments": json.dumps(tool_args) }}
                         result = await process_tool_call_func(fake_tc, servers, quiet_mode)
                         if result and 'content' in result:
-                            self.config.reasoning_trace(f"<think>Tool call output: {result['content']}</think>")
+                            self.config.reasoning_trace(f"<thinking>Tool call output: {result['content']}</thinking>")
                             conversation.append({"role": "user", "content": f"<tool_output>\n{result['content']}\n</tool_output>"})
                     continue
 
@@ -500,10 +504,10 @@ The Guidelines:
                 if code_blocks and self.config.enable_code_execution:
                     logger.info(f"Executing {code_blocks}")
                     for code in code_blocks:
-                        self.config.reasoning_trace(f"<think>Executing code: {code}\n<think>")
+                        self.config.reasoning_trace(f"<thinking>Executing code: {code}\n</thinking>")
                         output = python_interpreter(code, self.python_context)
                         code_outputs.append(output)
-                        self.config.reasoning_trace(f"<think>Code Output: {output}\n...</think>")
+                        self.config.reasoning_trace(f"<thinking>Code Output: {output}\n...</thinking>")
 
                 # If we have code outputs, add them to the conversation
                 if code_outputs:
@@ -516,7 +520,7 @@ The Guidelines:
                 
                 # If no code and no tool calls, we might be stuck
                 if not code_blocks and not tool_calls:
-                    no_code_output_msg = f"""<think>No code execution or tool calls detected</think>"""
+                    no_code_output_msg = f"""<thinking>No code execution or tool calls detected</thinking>"""
                     # self.config.reasoning_trace(no_code_output_msg)
                     conversation.append({"role": "user", "content": f"<no_code_output>{no_code_output_msg}</no_code_output>"})
 
@@ -524,15 +528,15 @@ The Guidelines:
 Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>".
 """})
                 # Check for final answer
-                final_answer = extract_final_answer(assistant_text)
                 if final_answer:
-                    self.config.reasoning_trace(f"<final_answer>{final_answer}</final_answer>")
-                    return True, f"<final_answer>{final_answer}</final_answer>"
+                    self.config.reasoning_trace(f"<final_answer>{final_answer}</final_answer>\n</content>\n</thinking_dot>")
 
+                    return True, f"<final_answer>{final_answer}</final_answer>"
             except Exception as e:
-                self.config.reasoning_trace(f"<think>Error in reasoning iteration {i + 1}: {str(e)}</think>")
-                return False, f"<think>Error during reasoning: {str(e)}</think>"
+                self.config.reasoning_trace(f"<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</content>\n</thinking_dot>")
+
+                return False, f"<error>Error during reasoning: {str(e)}</error>"
         
         # If we reach here, we've hit max iterations without a final answer
-        self.config.reasoning_trace(f"<final_answer>Reached max iterations ({self.config.max_iterations}) without final answer</final_answer>")
+        self.config.reasoning_trace(f"<final_answer>Reached max iterations ({self.config.max_iterations}) without final answer</final_answer>\n</content>\n</thinking_dot>")
         return False, f"Process stopped after reaching maximum iterations ({self.config.max_iterations})."
