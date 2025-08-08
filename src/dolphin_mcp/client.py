@@ -805,7 +805,7 @@ class MCPAgent:
             The final answer from the reasoning process
         """
         if not self.quiet_mode:
-            self.reasoning_config.reasoning_trace("<thinking_dot>\n<title>Planning...</title>\n<content>\n")
+            self.reasoning_config.reasoning_trace("<thinking_dot>\n<thinking_title>Planning...</thinking_title>\n<thinking_content>\n")
 
         # Generate initial plan
         initial_plan = await self.reasoner.generate_plan(
@@ -813,7 +813,7 @@ class MCPAgent:
         )
         
         if not self.quiet_mode:
-            log_planning = f"""<plan>{initial_plan}</plan>\n</content>\n</thinking_dot>"""
+            log_planning = f"""<plan>{initial_plan}</plan>\n</thinking_content>\n</thinking_dot>"""
             self.reasoning_config.reasoning_trace(log_planning)
             # self.reasoning_config.reasoning_trace("Starting execution...")
         
@@ -828,8 +828,8 @@ class MCPAgent:
             # if not self.quiet_mode:
             #     self.reasoning_config.reasoning_trace("\n====== ✅ FINAL ANSWER FOUND ======")
             # return result
-            if not self.quiet_mode:
-                self.reasoning_config.reasoning_trace(f"<error>\n====== ❌ ERROR OR MAX ITERATIONS ======\n{result}\n</error>\n</content>\n</thinking_dot>")
+            # if not self.quiet_mode:
+                # self.reasoning_config.reasoning_trace(f"<think>\n====== ❌ ERROR OR MAX ITERATIONS ======\n{result}\n</think>")
             return result
 
     async def prompt(self, user_query, use_reasoning: bool = None, guidelines: str = ""):
