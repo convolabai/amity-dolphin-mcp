@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "amity-dolphin-mcp"
-version = "0.2.19"
+name = "amitysolutions.dolphin-mcp"
+version = "0.2.21rc1"
 description = "A flexible Python client for interacting with Model Context Protocol (MCP) servers"
 readme = "README.md"
 requires-python = ">=3.8"
