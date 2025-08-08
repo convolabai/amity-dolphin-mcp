@@ -492,6 +492,9 @@ The Guidelines:
                         if result and 'content' in result:
                             self.config.reasoning_trace(f"Tool call output: {result['content']}\n")
                             conversation.append({"role": "user", "content": f"<tool_output>\n{result['content']}\n</tool_output>"})
+                    
+                    # Close thinking tags before continuing to next iteration
+                    self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
                     continue
 
                 # Execute Python code if present
@@ -513,6 +516,8 @@ The Guidelines:
                         "role": "user",
                         "content": f"<code_output>\n{combined_output}\n</code_output>"
                     })
+                    # Close thinking tags before continuing to next iteration
+                    self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
                     continue
                 
                 # If no code and no tool calls, we might be stuck
