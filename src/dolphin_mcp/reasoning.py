@@ -92,6 +92,12 @@ Rules:
  - Mostly of tools call is API, so make sure you utilize the Call-Tool and Code together to maximize the efficiency of execution.
  - If user didn't mentioned to allow you to ask back to the user in the guidelines, you should complete the task by yourself.
  - Choose only one action per step, either a tool call, Python code execution, or final answer.
+ - NEVER provide "next steps" or recommendations for what the user should do. Your job is to COMPLETE the entire task and provide the final result.
+ - When providing a final answer, ensure it contains the complete solution, not instructions for the user to follow.
+ - Do not end with phrases like "you should", "next you need to", "the user can", or similar instruction-giving language.
+ - Your final answer must be the actual answer to the question, not a roadmap or process description.
+ - You are expected to execute all necessary steps and provide the definitive answer, not delegate tasks back to the user.
+ - Complete the entire workflow from start to finish without leaving any steps for the user to perform.
  """
 
 
@@ -432,7 +438,7 @@ The Guidelines:
 
         for i in range(self.config.max_iterations):
             self.config.reasoning_trace(f"<thinking_dot>\n<thinking_title>Step {i + 1}:</thinking_title>\n<thinking_content>\n")
-            
+
             try:
                 # Generate response
                 result = await generate_func(conversation, model_cfg, [], stream=False)
@@ -526,9 +532,12 @@ The Guidelines:
                     # self.config.reasoning_trace(no_code_output_msg)
                     conversation.append({"role": "user", "content": f"<no_code_output>{no_code_output_msg}</no_code_output>"})
 
-                conversation.append({"role": "user", "content": f"""
-Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>".
-"""})
+                conversation.append({"role": "user", "content": f"""Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>".
+=== RESPONSE GUIDELINES ===
+- [IMPORTANT] Ensure your final answer is complete and does not require further action from the user.
+- [IMPORTANT] When providing a final answer, ensure it contains the complete solution, not instructions for the user to follow.
+- [IMPORTANT] Must not provide next steps or recommendations for the user in the final answer.
+==="""})
 
                 self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
 
