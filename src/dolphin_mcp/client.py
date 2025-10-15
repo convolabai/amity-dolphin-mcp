@@ -281,6 +281,8 @@ class MCPClient:
         await self._send_message(req)
 
         start = asyncio.get_event_loop().time()
+        isWarningLogged = False
+    
         while asyncio.get_event_loop().time() - start < self.tool_timeout:
             if rid in self.responses:
                 resp = self.responses[rid]
@@ -293,8 +295,9 @@ class MCPClient:
                     logger.info(f"Server {self.server_name}: Tool {tool_name} completed in {elapsed:.2f}s")
                     return resp["result"]
             await asyncio.sleep(0.01)  # Reduced sleep interval for more responsive streaming
-            if asyncio.get_event_loop().time() - start > 5:  # Log warning after 5 seconds
+            if asyncio.get_event_loop().time() - start > 5 and not isWarningLogged:  # Log warning after 5 seconds
                 logger.warning(f"Server {self.server_name}: Tool {tool_name} taking longer than 5s...")
+                isWarningLogged = True
         logger.error(f"Server {self.server_name}: Tool {tool_name} timed out after {self.tool_timeout}s")
         return {"error": f"Timeout waiting for tool result after {self.tool_timeout}s"}
 
