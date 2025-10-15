@@ -177,7 +177,7 @@ class MCPClient:
                     line = await proc.stdout.readline()
                     if not line:
                         break
-                    logger.debug(f"[{self.server_name} STDOUT]", line.decode().rstrip(), file=sys.stdout)
+                    print(f"[{self.server_name} STDOUT]", line.decode().rstrip(), file=sys.stdout)
                     await asyncio.sleep(0.01)  # Throttle to avoid busy loop
             asyncio.create_task(_print_stdout(self.process))
             # Print subprocess stderr to current process stderr
@@ -186,12 +186,12 @@ class MCPClient:
                     line = await proc.stderr.readline()
                     if not line:
                         break
-                    logger.error(f"[{self.server_name} STDERR]", line.decode().rstrip(), file=sys.stderr)
+                    print(f"[{self.server_name} STDERR]", line.decode().rstrip(), file=sys.stderr)
                     await asyncio.sleep(0.01)  # Throttle to avoid busy loop
             asyncio.create_task(_print_stderr(self.process))
             return await self._perform_initialize()
         except Exception as e:
-            logger.error(f"Server {self.server_name}: Failed to start process: {str(e)}")
+            print(f"Server {self.server_name}: Failed to start process: {str(e)}")
             return False
 
     async def _perform_initialize(self):
@@ -213,7 +213,7 @@ class MCPClient:
         await self._send_message(req)
 
         start = asyncio.get_event_loop().time()
-        timeout = 10  # Increased timeout to 10 seconds
+        timeout = 90  # increased timeout to 90 seconds
         while asyncio.get_event_loop().time() - start < timeout:
             if req_id in self.responses:
                 resp = self.responses[req_id]
@@ -809,7 +809,11 @@ class MCPAgent:
 
         # Generate initial plan
         initial_plan = await self.reasoner.generate_plan(
-            user_query, guidelines, generate_text, self.chosen_model, self.all_functions
+            user_query,
+            guidelines,
+            generate_text,
+            self.chosen_model,
+            self.all_functions,
         )
         
         if not self.quiet_mode:
@@ -819,9 +823,15 @@ class MCPAgent:
         
         # Execute the reasoning loop
         success, result = await self.reasoner.execute_reasoning_loop(
-            user_query, guidelines, initial_plan,
-            generate_text, self.chosen_model, self.all_functions,
-            process_tool_call, self.servers, self.quiet_mode
+            user_query,
+            guidelines,
+            initial_plan,
+            generate_text,
+            self.chosen_model,
+            self.all_functions,
+            process_tool_call,
+            self.servers,
+            self.quiet_mode,
         )
 
         if not success:

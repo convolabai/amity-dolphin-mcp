@@ -399,9 +399,18 @@ The Guidelines:
             logger.error(f"Error generating plan: {str(e)}")
             return f"Planning failed: {str(e)}. Proceeding with basic approach."
     
-    async def execute_reasoning_loop(self, question: str, guidelines: str, initial_plan: str,
-                                   generate_func, model_cfg: Dict, all_functions: List[Dict],
-                                   process_tool_call_func, servers: Dict, quiet_mode: bool) -> Tuple[bool, str]:
+    async def execute_reasoning_loop (
+        self,
+        question: str,
+        guidelines: str,
+        initial_plan: str,
+        generate_func,
+        model_cfg: Dict,
+        all_functions: List[Dict],
+        process_tool_call_func,
+        servers: Dict,
+        quiet_mode: bool,
+    ) -> Tuple[bool, str]:
         """
         Execute the main reasoning loop with code execution and tool calls.
         
@@ -533,10 +542,10 @@ The Guidelines:
                     conversation.append({"role": "user", "content": f"<no_code_output>{no_code_output_msg}</no_code_output>"})
 
                 conversation.append({"role": "user", "content": f"""Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>".
-=== RESPONSE GUIDELINES ===
-- [IMPORTANT] Ensure your final answer is complete and does not require further action from the user.
-- [IMPORTANT] When providing a final answer, ensure it contains the complete solution, not instructions for the user to follow.
-- [IMPORTANT] Must not provide next steps or recommendations for the user in the final answer.
+=== GUIDELINES ===
+- The next step MUST follow the summary context and plan from human expert.
+- The final answer MUST not contain any next steps or instructions for the user.
+- The final answer MUST be the complete answer to the user's original question.
 ==="""})
 
                 self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
