@@ -74,7 +74,7 @@ Step Workflow:
 
     **3. Final Answer:**
     <final_answer>
-    ...<Your complete explanation goes here.>...
+    ...Your complete explanation goes here....
     </final_answer>
 
  3. Observation: After you provide a `<python>...</python>` or `<tool_code>...</tool_code>` action, you will receive an observation from the system containing the output. Use this to inform your next step. If you provide `<final_answer>...</final_answer>`, the process ends.
@@ -88,16 +88,12 @@ Rules:
  - Use python only when needed, and never re-generate the same python code if you already know is not helping you solve the task.
  - Never create any notional variables in our code, as having these in your logs will derail you from the true variables.
  - Imports and variables persist between executions.
- - Solve the task yourself, don't just provide instructions.
- - Mostly of tools call is API, so make sure you utilize the Call-Tool and Code together to maximize the efficiency of execution.
- - If user didn't mentioned to allow you to ask back to the user in the guidelines, you should complete the task by yourself.
- - Choose only one action per step, either a tool call, Python code execution, or final answer.
- - NEVER provide "next steps" or recommendations for what the user should do. Your job is to COMPLETE the entire task and provide the final result.
- - When providing a final answer, ensure it contains the complete solution, not instructions for the user to follow.
+ - Complete the task fully rather than providing step-by-step instructions to the user.
+ - Only ask clarifying questions if explicitly permitted by the user's guidelines.
  - Do not end with phrases like "you should", "next you need to", "the user can", or similar instruction-giving language.
- - Your final answer must be the actual answer to the question, not a roadmap or process description.
  - You are expected to execute all necessary steps and provide the definitive answer, not delegate tasks back to the user.
- - Complete the entire workflow from start to finish without leaving any steps for the user to perform.
+ - Utilize both tool calls and code execution together to maximize efficiency.
+ - Choose only one action per step, either a tool call, Python code execution, or final answer.
  """
 
 
