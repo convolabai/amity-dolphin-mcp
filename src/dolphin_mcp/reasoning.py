@@ -276,10 +276,29 @@ def extract_final_answer(text: str) -> Optional[str]:
         Final answer string if found, None otherwise
     """
     final_answer_matches = re.findall(r'<final_answer.*?>\s*(.*?)\s*</final_answer>', text, re.DOTALL | re.IGNORECASE)
-    # ask_matches = re.findall(r'<ask.*?>\s*(.*?)\s*</ask>', text, re.DOTALL | re.IGNORECASE)
-    # monitor_matches = re.findall(r'<monitor.*?>\s*(.*?)\s*</monitor>', text, re.DOTALL | re.IGNORECASE)
+
     if final_answer_matches:
         return final_answer_matches[-1].strip()
+
+    # monitor_matches = re.findall(r'<monitor.*?>\s*(.*?)\s*</monitor>', text, re.DOTALL | re.IGNORECASE)
+
+    return None
+
+def extract_ask_question(text: str) -> Optional[str]:
+    """
+    Extract ask question from text if present.
+    
+    Args:
+        text: Text potentially containing an ask block
+
+    Returns:
+        Ask question string if found, None otherwise
+    """
+    ask_matches = re.findall(r'<ask.*?>\s*(.*?)\s*</ask>', text, re.DOTALL | re.IGNORECASE)
+
+    if ask_matches:
+        return ask_matches[-1].strip()
+
     return None
 
 
@@ -553,6 +572,13 @@ The Guidelines:
                     self.config.reasoning_trace(f"<final_answer>{final_answer}</final_answer>")
 
                     return True, f"<final_answer>{final_answer}</final_answer>"
+
+                ask_question = extract_ask_question(assistant_text)
+
+                if ask_question:
+                    self.config.reasoning_trace(f"<ask>{ask_question}</ask>")
+
+                    return True, f"<ask>{ask_question}</ask>"
 
             except Exception as e:
                 self.config.reasoning_trace(f"<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</thinking_content>\n</thinking_dot>")
