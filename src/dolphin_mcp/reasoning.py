@@ -94,6 +94,7 @@ Rules:
  - You are expected to execute all necessary steps and provide the definitive answer, not delegate tasks back to the user.
  - Utilize both tool calls and code execution together to maximize efficiency.
  - Choose only one action per step, either a tool call, Python code execution, or final answer.
+ - If you need to use tags, only use <final_answer>...</final_answer>, <ask>...</ask>, <tool_code>...</tool_code>, <python>...</python>, and <monitor>...</monitor> tags as per the context.
  """
 
 
@@ -561,6 +562,7 @@ The Guidelines:
 - The next step MUST follow the summary context and plan from human expert.
 - The final answer MUST not contain any next steps or instructions for the user.
 - The final answer MUST be the complete answer to the user's original question.
+- If you need to use tags, only use <final_answer>...</final_answer>, <ask>...</ask>, <tool_code>...</tool_code>, <python>...</python>, and <monitor>...</monitor> tags as per the context.
 ==="""})
 
                 self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
