@@ -142,6 +142,14 @@ Solution Approach:
 - Step 2: ...
 - Step 3: ...
 
+Your output must strictly follow below topic with NO ADDITIONAL topics:
+1. Sub-questions
+2. Entity Extraction
+3. Relevant Tools and Approaches
+4. Constraints
+5. Solution Approach
+
+
 Available tools: 
 { [ {"name": func["name"], "description": func["description"] } for func in all_functions] }\n
 
@@ -149,6 +157,13 @@ Common Tools, The most common that you can use together with the available tools
 Python Interpreter:
 - name: "python_interpreter", 
 - description: "Execute Python code in a persistent context"
+
+Your output must strictly follow below topic with NO ADDITIONAL topics:
+1. Sub-questions
+2. Entity Extraction
+3. Relevant Tools and Approaches
+4. Constraints
+5. Solution Approach
 """
     else:
         return """Based on the current interaction and progress, provide feedback on:
@@ -557,13 +572,7 @@ The Guidelines:
                     # self.config.reasoning_trace(no_code_output_msg)
                     conversation.append({"role": "user", "content": f"<no_code_output>{no_code_output_msg}</no_code_output>"})
 
-                conversation.append({"role": "user", "content": f"""Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>".
-=== GUIDELINES ===
-- The next step MUST follow the summary context and plan from human expert.
-- The final answer MUST not contain any next steps or instructions for the user.
-- The final answer MUST be the complete answer to the user's original question.
-- If you need to use tags, only use <final_answer>...</final_answer>, <ask>...</ask>, <tool_code>...</tool_code>, <python>...</python>, and <monitor>...</monitor> tags as per the context.
-==="""})
+                conversation.append({"role": "user", "content": f"""Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>"."""})
 
                 self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
 
