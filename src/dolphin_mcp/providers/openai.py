@@ -13,6 +13,8 @@ async def generate_with_openai_stream(client: AsyncOpenAI, model_name: str, conv
                                     top_p: Optional[float] = None, max_tokens: Optional[int] = None) -> AsyncGenerator:
     """Internal function for streaming generation"""
     try:
+        print(f"Starting OpenAI streaming generation with model '{model_name}'")
+
         response = await client.chat.completions.create(
             model=model_name,
             messages=conversation,

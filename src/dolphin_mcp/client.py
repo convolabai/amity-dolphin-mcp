@@ -177,7 +177,7 @@ class MCPClient:
                     line = await proc.stdout.readline()
                     if not line:
                         break
-                    logger.debug(f"[{self.server_name} STDOUT]", line.decode().rstrip(), file=sys.stdout)
+                    print(f"[{self.server_name} STDOUT]", line.decode().rstrip(), file=sys.stdout)
                     await asyncio.sleep(0.01)  # Throttle to avoid busy loop
             asyncio.create_task(_print_stdout(self.process))
             # Print subprocess stderr to current process stderr
@@ -186,12 +186,12 @@ class MCPClient:
                     line = await proc.stderr.readline()
                     if not line:
                         break
-                    logger.error(f"[{self.server_name} STDERR]", line.decode().rstrip(), file=sys.stderr)
+                    print(f"[{self.server_name} STDERR]", line.decode().rstrip(), file=sys.stderr)
                     await asyncio.sleep(0.01)  # Throttle to avoid busy loop
             asyncio.create_task(_print_stderr(self.process))
             return await self._perform_initialize()
         except Exception as e:
-            logger.error(f"Server {self.server_name}: Failed to start process: {str(e)}")
+            print(f"Server {self.server_name}: Failed to start process: {str(e)}")
             return False
 
     async def _perform_initialize(self):
@@ -213,7 +213,7 @@ class MCPClient:
         await self._send_message(req)
 
         start = asyncio.get_event_loop().time()
-        timeout = 10  # Increased timeout to 10 seconds
+        timeout = 90  # increased timeout to 90 seconds
         while asyncio.get_event_loop().time() - start < timeout:
             if req_id in self.responses:
                 resp = self.responses[req_id]
@@ -281,6 +281,8 @@ class MCPClient:
         await self._send_message(req)
 
         start = asyncio.get_event_loop().time()
+        isWarningLogged = False
+    
         while asyncio.get_event_loop().time() - start < self.tool_timeout:
             if rid in self.responses:
                 resp = self.responses[rid]
@@ -293,8 +295,9 @@ class MCPClient:
                     logger.info(f"Server {self.server_name}: Tool {tool_name} completed in {elapsed:.2f}s")
                     return resp["result"]
             await asyncio.sleep(0.01)  # Reduced sleep interval for more responsive streaming
-            if asyncio.get_event_loop().time() - start > 5:  # Log warning after 5 seconds
+            if asyncio.get_event_loop().time() - start > 5 and not isWarningLogged:  # Log warning after 5 seconds
                 logger.warning(f"Server {self.server_name}: Tool {tool_name} taking longer than 5s...")
+                isWarningLogged = True
         logger.error(f"Server {self.server_name}: Tool {tool_name} timed out after {self.tool_timeout}s")
         return {"error": f"Timeout waiting for tool result after {self.tool_timeout}s"}
 
@@ -805,31 +808,41 @@ class MCPAgent:
             The final answer from the reasoning process
         """
         if not self.quiet_mode:
-            self.reasoning_config.reasoning_trace("<think>Planning...</think>")
+            self.reasoning_config.reasoning_trace("<thinking_dot>\n<thinking_title>Planning...</thinking_title>\n<thinking_content>\n")
 
         # Generate initial plan
         initial_plan = await self.reasoner.generate_plan(
-            user_query, guidelines, generate_text, self.chosen_model, self.all_functions
+            user_query,
+            guidelines,
+            generate_text,
+            self.chosen_model,
+            self.all_functions,
         )
         
         if not self.quiet_mode:
-            log_planning = f"""<plan>{initial_plan}</plan>"""
+            log_planning = f"""<plan>{initial_plan}</plan>\n</thinking_content>\n</thinking_dot>"""
             self.reasoning_config.reasoning_trace(log_planning)
             # self.reasoning_config.reasoning_trace("Starting execution...")
         
         # Execute the reasoning loop
         success, result = await self.reasoner.execute_reasoning_loop(
-            user_query, guidelines, initial_plan,
-            generate_text, self.chosen_model, self.all_functions,
-            process_tool_call, self.servers, self.quiet_mode
+            user_query,
+            guidelines,
+            initial_plan,
+            generate_text,
+            self.chosen_model,
+            self.all_functions,
+            process_tool_call,
+            self.servers,
+            self.quiet_mode,
         )
 
         if not success:
             # if not self.quiet_mode:
             #     self.reasoning_config.reasoning_trace("\n====== ✅ FINAL ANSWER FOUND ======")
             # return result
-            if not self.quiet_mode:
-                self.reasoning_config.reasoning_trace(f"<think>\n====== ❌ ERROR OR MAX ITERATIONS ======\n{result}\n</think>")
+            # if not self.quiet_mode:
+                # self.reasoning_config.reasoning_trace(f"<think>\n====== ❌ ERROR OR MAX ITERATIONS ======\n{result}\n</think>")
             return result
 
     async def prompt(self, user_query, use_reasoning: bool = None, guidelines: str = ""):

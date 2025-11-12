@@ -14,3 +14,11 @@ termcolor
 aiofiles
 pyyaml
 aiohttp
+pdfplumber
+pymupdf
+openpyxl
+pandas
+python-docx
+python-pptx
+chardet
+python-magic
