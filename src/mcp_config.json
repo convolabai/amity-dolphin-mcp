@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "mcp-atlassian": {
-      "command": "docker",
+      "command": "nerdctl",
       "args": [
         "run",
         "-i",
@@ -24,7 +24,7 @@
       }
     },
     "github": {
-      "command": "docker",
+      "command": "nerdctl",
       "args": [
         "run",
         "-i",
