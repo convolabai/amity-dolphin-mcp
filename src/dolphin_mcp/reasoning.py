@@ -417,6 +417,15 @@ Please provide *only* the JSON object for the arguments, without any other text 
 - {question}
 The Guidelines: 
 - {guidelines}
+
+====== RESPONSE GUIDELINES ======
+Your output must strictly follow below topic with NO ADDITIONAL topics:
+1. Sub-questions
+2. Entity Extraction
+3. Relevant Tools and Approaches
+4. Constraints
+5. Solution Approach
+======
 """
             }
         ]
