@@ -348,8 +348,10 @@ class MultiStepReasoner:
     from the example code.
     """
     
-    def __init__(self, config: ReasoningConfig = None):
+    def __init__(self, config: ReasoningConfig = None, parent_trace_id: Optional[str] = None):
         self.config = config or ReasoningConfig()
+        # parent_trace_id for distributed tracing
+        self.parent_trace_id = parent_trace_id
         self.python_context: Dict[str, Any] = {}
         
     async def _get_tool_args_from_llm(self, tool_name: str, tool_def: Dict, conversation: List[Dict], generate_func, model_cfg: Dict) -> Dict:
@@ -474,6 +476,8 @@ The Guidelines:
             "dolphin_mcp.reasoning.loop",
             kind=SpanKind.INTERNAL,
         ) as loop_span:
+            if self.parent_trace_id:
+                loop_span.set_attribute("parent.trace_id", self.parent_trace_id)
             loop_span.set_attribute("reasoning.question", question[:256])
             loop_span.set_attribute("reasoning.guidelines_present", bool(guidelines))
             loop_span.set_attribute("reasoning.initial_plan_present", bool(initial_plan))
