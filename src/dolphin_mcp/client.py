@@ -1102,6 +1102,7 @@ async def run_interaction(
             )
             response = await agent.prompt(user_query, use_reasoning=use_reasoning, guidelines=guidelines)
             await agent.cleanup()
+            span.set_status(Status(StatusCode.OK))
             return response
         except Exception as e:
             # Mark span as error and record the error type
