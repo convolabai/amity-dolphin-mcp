@@ -348,10 +348,12 @@ class MultiStepReasoner:
     from the example code.
     """
     
-    def __init__(self, config: ReasoningConfig = None, parent_trace_id: Optional[str] = None):
+    def __init__(self, config: ReasoningConfig = None, parent_trace_id: Optional[str] = None, parent_session_id: Optional[str] = None):
         self.config = config or ReasoningConfig()
-        # parent_trace_id for distributed tracing
+        # params for distributed tracing
         self.parent_trace_id = parent_trace_id
+        self.parent_session_id = parent_session_id
+
         self.python_context: Dict[str, Any] = {}
         
     async def _get_tool_args_from_llm(self, tool_name: str, tool_def: Dict, conversation: List[Dict], generate_func, model_cfg: Dict) -> Dict:
@@ -478,6 +480,8 @@ The Guidelines:
         ) as loop_span:
             if self.parent_trace_id:
                 loop_span.set_attribute("parent.trace_id", self.parent_trace_id)
+            if self.parent_session_id:
+                loop_span.set_attribute("parent.session_id", self.parent_session_id)
             loop_span.set_attribute("reasoning.question", question[:256])
             loop_span.set_attribute("reasoning.guidelines_present", bool(guidelines))
             loop_span.set_attribute("reasoning.initial_plan_present", bool(initial_plan))
@@ -574,10 +578,21 @@ The Guidelines:
                                 "dolphin_mcp.reasoning.tool_call",
                                 kind=SpanKind.CLIENT,
                             ) as tool_span:
+                                # Correclation attributes
+                                if self.parent_session_id:
+                                    tool_span.set_attribute("parent.session_id", self.parent_session_id)
+                                if self.parent_trace_id:
+                                    tool_span.set_attribute("parent.trace_id", self.parent_trace_id)
+                                tool_span.set_attribute("reasoning.step_index", i + 1)
                                 tool_span.set_attribute("tool.name", tool_name)
                                 tool_span.set_attribute("tool.args", json.dumps(tool_args)[:512])
                                 
                                 result = await process_tool_call_func(fake_tc, servers, quiet_mode)
+
+                                if isinstance(result, dict):
+                                    tool_span.set_attribute("tool.success", "error" not in result)
+                                    if "content" in result:
+                                        tool_span.set_attribute("tool.output_length", len(result["content"]))
 
                             if result and 'content' in result:
                                 self.config.reasoning_trace(f"Tool call output: {result['content']}\n")

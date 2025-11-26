@@ -174,6 +174,8 @@ class MCPClient:
             # add correlation if present
             if getattr(self, "parent_trace_id", None):
                 span.set_attribute("parent.trace_id", self.parent_trace_id)
+            if getattr(self, "parent_session_id", None):
+                span.set_attribute("parent.session_id", self.parent_session_id)
             span.set_attribute("mcp.server_name", self.server_name)
             span.set_attribute("process.command", self.command or "")
             span.set_attribute("process.args", " ".join(expanded_args))
@@ -198,6 +200,7 @@ class MCPClient:
                     limit=1 << 20  # Set a larger buffer size for stdout
                 )
                 span.set_attribute("process.pid", self.process.pid or 0)
+                span.set_attribute("mcp.server_initialized", True)
 
                 self.receive_task = asyncio.create_task(self._receive_loop())
 
@@ -238,6 +241,7 @@ class MCPClient:
                     span.set_status(Status(StatusCode.OK))
                 return ok
             except Exception as e:
+                span.set_attribute("mcp.server_initialized", False)
                 span.set_status(Status(StatusCode.ERROR, description=str(e)))
                 span.set_attribute("error.type", type(e).__name__)
                 logger.error(f"Server {self.server_name}: Failed to start process: {str(e)}")
@@ -657,8 +661,9 @@ class MCPAgent:
                      log_messages_path: Optional[str] = None,
                      stream: bool = False,
                      reasoning_config: Optional[ReasoningConfig] = None,
-                     # parent_trace_id for distributed tracing
-                     parent_trace_id: Optional[str] = None,) -> "MCPAgent":
+                     # params for distributed tracing
+                     parent_trace_id: Optional[str] = None,
+                     parent_session_id: Optional[str] = None,) -> "MCPAgent":
         """
         Create an instance of the MCPAgent using MCPAgent.create(...)
         async class method so that the initialization can be awaited.
@@ -692,8 +697,9 @@ class MCPAgent:
             log_messages_path=log_messages_path,
             stream=stream,
             reasoning_config=reasoning_config,
-            # parent_trace_id for distributed tracing
+            # params for distributed tracing
             parent_trace_id=parent_trace_id,
+            parent_session_id=parent_session_id,
         )
         return obj
     
@@ -709,19 +715,20 @@ class MCPAgent:
                           log_messages_path: Optional[str] = None,
                           stream: bool = False,
                           reasoning_config: Optional[ReasoningConfig] = None,
-                          # parent_trace_id for distributed tracing
-                          parent_trace_id: Optional[str] = None,) -> Union[str, AsyncGenerator[str, None]]:
+                          # params for distributed tracing
+                          parent_trace_id: Optional[str] = None,
+                          parent_session_id: Optional[str] = None,) -> Union[str, AsyncGenerator[str, None]]:
 
         self.stream = stream
         self.log_messages_path = log_messages_path
         self.quiet_mode = quiet_mode
-        # parent_trace_id for distributed tracing
+        # params for distributed tracing
         self.parent_trace_id = parent_trace_id
+        self.parent_session_id = parent_session_id
         
         # Initialize the reasoning system
         self.reasoning_config = reasoning_config or ReasoningConfig()
-        self.reasoner = MultiStepReasoner(self.reasoning_config, parent_trace_id=self.parent_trace_id)
-
+        self.reasoner = MultiStepReasoner(self.reasoning_config, parent_trace_id=self.parent_trace_id, parent_session_id=self.parent_session_id)
         # 1) Load MCP Server config if not provided directly
         if mcp_server_config is None:
             mcp_server_config = await load_config_from_file(mcp_server_config_path)
@@ -792,8 +799,9 @@ class MCPAgent:
                     cwd=conf.get("cwd", None),
                     tool_timeout=tool_timeout 
                 )
-                # attach parent_trace_id for distributed tracing
+                # attach correlation params for distributed tracing
                 client.parent_trace_id = self.parent_trace_id
+                client.parent_session_id = self.parent_session_id
             ok = await client.start()
             if not ok:
                 if not quiet_mode:
@@ -1036,8 +1044,9 @@ async def run_interaction(
     reasoning_config: Optional[ReasoningConfig] = None,
     use_reasoning: Optional[bool] = None,
     guidelines: str = "",
-    # parent trace ID for distributed tracing
+    # params for distributed tracing
     parent_trace_id: Optional[str] = None,
+    parent_session_id: Optional[str] = None,
 ) -> Union[str, AsyncGenerator[str, None]]:
     """
     Run an interaction with the MCP servers.
@@ -1060,20 +1069,42 @@ async def run_interaction(
         If stream=False: The final text response
         If stream=True: AsyncGenerator yielding chunks of the response
     """
-    if provider_config is None:
-        provider_config = await load_config_from_file(provider_config_path)
-    agent = await MCPAgent.create(
-        model_name=model_name,
-        provider_config=provider_config, # Pass loaded provider_config
-        mcp_server_config=mcp_server_config, # Pass mcp_server_config
-        mcp_server_config_path=mcp_server_config_path, # Pass mcp_server_config_path
-        quiet_mode=quiet_mode,
-        log_messages_path=log_messages_path,
-        stream=stream,
-        reasoning_config=reasoning_config,
-        # parent_trace_id for distributed tracing
-        parent_trace_id=parent_trace_id,
-    )
-    response = await agent.prompt(user_query, use_reasoning=use_reasoning, guidelines=guidelines)
-    await agent.cleanup()
-    return response
+    with _tracer.start_as_current_span(
+        "dolphin_mcp.run_interaction",
+        kind=SpanKind.INTERNAL,
+    ) as span:
+        # Add correlation attributes to span if exist and init span attribute
+        if parent_trace_id:
+            span.set_attribute("parent.trace_id", parent_trace_id)
+        if parent_session_id:
+            span.set_attribute("parent.session_id", parent_session_id)
+        span.set_attribute("mcp.user_query_length", len(user_query))
+        span.set_attribute("mcp.guidelines_present", bool(guidelines))
+        span.set_attribute("mcp.stream", stream)
+        if model_name:
+            span.set_attribute("mcp.model_name", model_name)
+        
+        try:
+            if provider_config is None:
+                provider_config = await load_config_from_file(provider_config_path)
+            agent = await MCPAgent.create(
+                model_name=model_name,
+                provider_config=provider_config, # Pass loaded provider_config
+                mcp_server_config=mcp_server_config, # Pass mcp_server_config
+                mcp_server_config_path=mcp_server_config_path, # Pass mcp_server_config_path
+                quiet_mode=quiet_mode,
+                log_messages_path=log_messages_path,
+                stream=stream,
+                reasoning_config=reasoning_config,
+                # params for distributed tracing
+                parent_trace_id=parent_trace_id,
+                parent_session_id=parent_session_id,
+            )
+            response = await agent.prompt(user_query, use_reasoning=use_reasoning, guidelines=guidelines)
+            await agent.cleanup()
+            return response
+        except Exception as e:
+            # Mark span as error and record the error type
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.set_attribute("error.type", type(e).__name__)
+            raise
