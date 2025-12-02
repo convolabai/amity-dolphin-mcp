@@ -21,6 +21,13 @@ from .providers.ollama import generate_with_ollama
 from .providers.lmstudio import generate_with_lmstudio
 from .reasoning import MultiStepReasoner, ReasoningConfig
 
+# --- OTEL imports and initialization ---
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
+
+_tracer = trace.get_tracer(__name__)
+# --- END OTEL imports and initialization ---
+
 logger = logging.getLogger("dolphin_mcp")
 logging.getLogger(__name__).setLevel(logging.DEBUG)  # Set default logging level to DEBUG
 
@@ -159,40 +166,86 @@ class MCPClient:
         if self.env:
             env_vars.update(self.env)
 
-        try:
-            self.process = await asyncio.create_subprocess_exec(
-                self.command,
-                *expanded_args,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env_vars,
-                cwd=self.cwd,
-                limit=1 << 20 # Set a larger buffer size for stdout
-            )
-            self.receive_task = asyncio.create_task(self._receive_loop())
-            # Print subprocess stdout to current process stdout
-            async def _print_stdout(proc):
-                while True:
-                    line = await proc.stdout.readline()
-                    if not line:
-                        break
-                    print(f"[{self.server_name} STDOUT]", line.decode().rstrip(), file=sys.stdout)
-                    await asyncio.sleep(0.01)  # Throttle to avoid busy loop
-            asyncio.create_task(_print_stdout(self.process))
-            # Print subprocess stderr to current process stderr
-            async def _print_stderr(proc):
-                while True:
-                    line = await proc.stderr.readline()
-                    if not line:
-                        break
-                    print(f"[{self.server_name} STDERR]", line.decode().rstrip(), file=sys.stderr)
-                    await asyncio.sleep(0.01)  # Throttle to avoid busy loop
-            asyncio.create_task(_print_stderr(self.process))
-            return await self._perform_initialize()
-        except Exception as e:
-            print(f"Server {self.server_name}: Failed to start process: {str(e)}")
-            return False
+        # OTEL span around starting the MCP process (docker, uvx, etc.)
+        with _tracer.start_as_current_span(
+            "mcp.server.process_start",
+            kind=SpanKind.CLIENT,
+        ) as span:
+            # add correlation if present
+            if getattr(self, "parent_trace_id", None):
+                span.set_attribute("parent.trace_id", self.parent_trace_id)
+            if getattr(self, "parent_session_id", None):
+                span.set_attribute("parent.session_id", self.parent_session_id)
+            span.set_attribute("mcp.server_name", self.server_name)
+            span.set_attribute("process.command", self.command or "")
+            span.set_attribute("process.args", " ".join(expanded_args))
+            span.set_attribute("process.cwd", self.cwd or "")
+
+            # OTEL mark runtime in span attributes
+            if self.command in ("docker", "uvx", "uv"):
+                span.set_attribute("container.runtime", self.command)
+            else:
+                span.set_attribute("container.runtime", "other")
+                span.set_attribute("container.command", self.command or "")
+
+            try:
+                self.process = await asyncio.create_subprocess_exec(
+                    self.command,
+                    *expanded_args,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env_vars,
+                    cwd=self.cwd,
+                    limit=1 << 20  # Set a larger buffer size for stdout
+                )
+                span.set_attribute("process.pid", self.process.pid or 0)
+                span.set_attribute("mcp.server_initialized", True)
+
+                self.receive_task = asyncio.create_task(self._receive_loop())
+
+                # Print subprocess stdout to current process stdout
+                async def _print_stdout(proc):
+                    while True:
+                        line = await proc.stdout.readline()
+                        if not line:
+                            break
+                        print(f"[{self.server_name} STDOUT]", line.decode().rstrip(), file=sys.stdout)
+                        await asyncio.sleep(0.01)  # Throttle to avoid busy loop
+
+                asyncio.create_task(_print_stdout(self.process))
+
+                # Print subprocess stderr to current process stderr
+                async def _print_stderr(proc):
+                    while True:
+                        line = await proc.stderr.readline()
+                            # ^ keep existing behavior
+                        if not line:
+                            break
+                        print(f"[{self.server_name} STDERR]", line.decode().rstrip(), file=sys.stderr)
+                        await asyncio.sleep(0.01)  # Throttle to avoid busy loop
+
+                asyncio.create_task(_print_stderr(self.process))
+
+                # Let existing initialize logic run; we can mark status based on result
+                ok = await self._perform_initialize()
+                span.set_attribute("mcp.server_initialized", bool(ok))
+                if not ok:
+                    span.set_status(
+                        Status(
+                            status_code=StatusCode.ERROR,
+                            description="MCP server initialize failed",
+                        )
+                    )
+                else:
+                    span.set_status(Status(StatusCode.OK))
+                return ok
+            except Exception as e:
+                span.set_attribute("mcp.server_initialized", False)
+                span.set_status(Status(StatusCode.ERROR, description=str(e)))
+                span.set_attribute("error.type", type(e).__name__)
+                logger.error(f"Server {self.server_name}: Failed to start process: {str(e)}")
+                return False
 
     async def _perform_initialize(self):
         self.request_id += 1
@@ -607,7 +660,10 @@ class MCPAgent:
                      quiet_mode: bool = False,
                      log_messages_path: Optional[str] = None,
                      stream: bool = False,
-                     reasoning_config: Optional[ReasoningConfig] = None) -> "MCPAgent":
+                     reasoning_config: Optional[ReasoningConfig] = None,
+                     # params for distributed tracing
+                     parent_trace_id: Optional[str] = None,
+                     parent_session_id: Optional[str] = None,) -> "MCPAgent":
         """
         Create an instance of the MCPAgent using MCPAgent.create(...)
         async class method so that the initialization can be awaited.
@@ -640,7 +696,10 @@ class MCPAgent:
             quiet_mode=quiet_mode,
             log_messages_path=log_messages_path,
             stream=stream,
-            reasoning_config=reasoning_config
+            reasoning_config=reasoning_config,
+            # params for distributed tracing
+            parent_trace_id=parent_trace_id,
+            parent_session_id=parent_session_id,
         )
         return obj
     
@@ -655,16 +714,21 @@ class MCPAgent:
                           quiet_mode: bool = False,
                           log_messages_path: Optional[str] = None,
                           stream: bool = False,
-                          reasoning_config: Optional[ReasoningConfig] = None) -> Union[str, AsyncGenerator[str, None]]:
+                          reasoning_config: Optional[ReasoningConfig] = None,
+                          # params for distributed tracing
+                          parent_trace_id: Optional[str] = None,
+                          parent_session_id: Optional[str] = None,) -> Union[str, AsyncGenerator[str, None]]:
 
         self.stream = stream
         self.log_messages_path = log_messages_path
         self.quiet_mode = quiet_mode
+        # params for distributed tracing
+        self.parent_trace_id = parent_trace_id
+        self.parent_session_id = parent_session_id
         
         # Initialize the reasoning system
         self.reasoning_config = reasoning_config or ReasoningConfig()
-        self.reasoner = MultiStepReasoner(self.reasoning_config)
-
+        self.reasoner = MultiStepReasoner(self.reasoning_config, parent_trace_id=self.parent_trace_id, parent_session_id=self.parent_session_id)
         # 1) Load MCP Server config if not provided directly
         if mcp_server_config is None:
             mcp_server_config = await load_config_from_file(mcp_server_config_path)
@@ -735,6 +799,9 @@ class MCPAgent:
                     cwd=conf.get("cwd", None),
                     tool_timeout=tool_timeout 
                 )
+                # attach correlation params for distributed tracing
+                client.parent_trace_id = self.parent_trace_id
+                client.parent_session_id = self.parent_session_id
             ok = await client.start()
             if not ok:
                 if not quiet_mode:
@@ -976,7 +1043,10 @@ async def run_interaction(
     stream: bool = False,
     reasoning_config: Optional[ReasoningConfig] = None,
     use_reasoning: Optional[bool] = None,
-    guidelines: str = ""
+    guidelines: str = "",
+    # params for distributed tracing
+    parent_trace_id: Optional[str] = None,
+    parent_session_id: Optional[str] = None,
 ) -> Union[str, AsyncGenerator[str, None]]:
     """
     Run an interaction with the MCP servers.
@@ -999,18 +1069,43 @@ async def run_interaction(
         If stream=False: The final text response
         If stream=True: AsyncGenerator yielding chunks of the response
     """
-    if provider_config is None:
-        provider_config = await load_config_from_file(provider_config_path)
-    agent = await MCPAgent.create(
-        model_name=model_name,
-        provider_config=provider_config, # Pass loaded provider_config
-        mcp_server_config=mcp_server_config, # Pass mcp_server_config
-        mcp_server_config_path=mcp_server_config_path, # Pass mcp_server_config_path
-        quiet_mode=quiet_mode,
-        log_messages_path=log_messages_path,
-        stream=stream,
-        reasoning_config=reasoning_config
-    )
-    response = await agent.prompt(user_query, use_reasoning=use_reasoning, guidelines=guidelines)
-    await agent.cleanup()
-    return response
+    with _tracer.start_as_current_span(
+        "dolphin_mcp.run_interaction",
+        kind=SpanKind.INTERNAL,
+    ) as span:
+        # Add correlation attributes to span if exist and init span attribute
+        if parent_trace_id:
+            span.set_attribute("parent.trace_id", parent_trace_id)
+        if parent_session_id:
+            span.set_attribute("parent.session_id", parent_session_id)
+        span.set_attribute("mcp.user_query_length", len(user_query))
+        span.set_attribute("mcp.guidelines_present", bool(guidelines))
+        span.set_attribute("mcp.stream", stream)
+        if model_name:
+            span.set_attribute("mcp.model_name", model_name)
+        
+        try:
+            if provider_config is None:
+                provider_config = await load_config_from_file(provider_config_path)
+            agent = await MCPAgent.create(
+                model_name=model_name,
+                provider_config=provider_config, # Pass loaded provider_config
+                mcp_server_config=mcp_server_config, # Pass mcp_server_config
+                mcp_server_config_path=mcp_server_config_path, # Pass mcp_server_config_path
+                quiet_mode=quiet_mode,
+                log_messages_path=log_messages_path,
+                stream=stream,
+                reasoning_config=reasoning_config,
+                # params for distributed tracing
+                parent_trace_id=parent_trace_id,
+                parent_session_id=parent_session_id,
+            )
+            response = await agent.prompt(user_query, use_reasoning=use_reasoning, guidelines=guidelines)
+            await agent.cleanup()
+            span.set_status(Status(StatusCode.OK))
+            return response
+        except Exception as e:
+            # Mark span as error and record the error type
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.set_attribute("error.type", type(e).__name__)
+            raise
