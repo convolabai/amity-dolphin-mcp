@@ -17,20 +17,12 @@ from typing import Dict, List, Optional, Any, Tuple, AsyncGenerator, Union
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from .docker_sandbox import sandboxed_python_interpreter
+
 _tracer = trace.get_tracer(__name__)
 # --- END OTEL imports and initialization ---
 
 logger = logging.getLogger("dolphin_mcp.reasoning")
-
-# Import docker sandbox interpreter (will be used if enabled via parameter)
-try:
-    from .docker_sandbox import sandboxed_python_interpreter as _docker_interpreter
-    _DOCKER_SANDBOX_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Docker sandbox not available: {e}")
-    _DOCKER_SANDBOX_AVAILABLE = False
-    _docker_interpreter = None
-
 
 def get_reasoning_system_prompt(all_functions: List[Dict] = None) -> str:
     """
@@ -253,14 +245,14 @@ def python_interpreter(code: str, context: Dict[str, Any], use_docker_sandbox: b
         String output from the code execution
     """
 
-    logger.info(f"Executing Python code with use_docker_sandbox={use_docker_sandbox} docker available={_DOCKER_SANDBOX_AVAILABLE}")
+    logger.info(f"Executing Python code with use_docker_sandbox={use_docker_sandbox}")
 
     # Use Docker sandbox if enabled and available
-    if use_docker_sandbox and _DOCKER_SANDBOX_AVAILABLE:
+    if use_docker_sandbox:
         try:
             logger.info("Using Docker sandbox for code execution")
 
-            return _docker_interpreter(code, context, session_id=session_id, image_name=docker_image_name, image_tag=docker_image_tag)
+            return sandboxed_python_interpreter(code, context, session_id=session_id, image_name=docker_image_name, image_tag=docker_image_tag)
         except Exception as e:
             logger.error(f"Docker sandbox execution failed, falling back to local exec: {e}")
             # Fall through to local execution
