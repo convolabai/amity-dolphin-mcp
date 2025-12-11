@@ -165,24 +165,36 @@ class DockerSandboxExecutor:
             # Run the container
             logger.info(f"Executing code in Docker container (session: {self.session_id})")
             
-            result = self.docker_client.containers.run(
+            # Create and start container with timeout handling
+            container = self.docker_client.containers.create(
                 image=self.full_image_name,
                 command=["python3", f"{self.container_mount_path}/{script_path.name}"],
                 volumes=volumes,
                 network_mode=network_mode,
                 mem_limit=self.memory_limit,
                 cpu_quota=self.cpu_quota,
-                remove=True,  # Auto-remove container after execution
                 stdout=True,
                 stderr=True,
-                detach=False,
                 user="sandbox",  # Run as non-root user
                 security_opt=["no-new-privileges"],  # Additional security
                 cap_drop=["ALL"],  # Drop all capabilities
                 read_only=False,  # Allow writes to mounted volumes
                 tmpfs={'/tmp': 'size=100M,mode=1777'},  # Writable /tmp with size limit
-                timeout=self.timeout
             )
+            
+            try:
+                container.start()
+                exit_status = container.wait(timeout=self.timeout)
+                
+                # Get logs (output)
+                result = container.logs(stdout=True, stderr=True)
+                
+            finally:
+                # Always remove the container
+                try:
+                    container.remove(force=True)
+                except:
+                    pass
             
             # Decode output
             output = result.decode('utf-8')
