@@ -1,0 +1,32 @@
+# Minimal Python sandbox environment
+FROM python:3.11-slim
+
+# Install only safe, essential packages for data analysis
+RUN pip install --no-cache-dir \
+    numpy \
+    pandas \
+    matplotlib \
+    scipy \
+    scikit-learn \
+    pdfplumber \
+    pymupdf \
+    pandas \
+    python-docx \
+    python-pptx \
+    openpyxl \
+    chardet \
+    python-magic
+
+# Create a non-root user for security
+RUN useradd -m -u 1000 sandbox && \
+    mkdir -p /tmp && \
+    chown -R sandbox:sandbox /tmp
+
+# Set working directory
+WORKDIR /sandbox
+
+# Switch to non-root user
+USER sandbox
+
+# Default command (will be overridden)
+CMD ["python3", "-c", "print('Sandbox ready')"]

@@ -1044,6 +1044,10 @@ async def run_interaction(
     reasoning_config: Optional[ReasoningConfig] = None,
     use_reasoning: Optional[bool] = None,
     guidelines: str = "",
+    use_docker_sandbox: bool = False,
+    session_id: Optional[str] = None,
+    docker_image_name: str = "dolphin-python-sandbox",
+    docker_image_tag: str = "latest",
     # params for distributed tracing
     parent_trace_id: Optional[str] = None,
     parent_session_id: Optional[str] = None,
@@ -1064,6 +1068,10 @@ async def run_interaction(
         reasoning_config: Configuration for multi-step reasoning (optional)
         use_reasoning: Whether to use multi-step reasoning (optional, overrides config default)
         guidelines: Answer guidelines for reasoning mode (optional)
+        use_docker_sandbox: Whether to use Docker sandbox for Python code execution (default: False)
+        session_id: Session ID for Docker sandbox (optional, will be generated if not provided)
+        docker_image_name: Docker image name to use for sandbox (default: "dolphin-python-sandbox")
+        docker_image_tag: Docker image tag/version to use for sandbox (default: "latest")
 
     Returns:
         If stream=False: The final text response
@@ -1087,6 +1095,22 @@ async def run_interaction(
         try:
             if provider_config is None:
                 provider_config = await load_config_from_file(provider_config_path)
+            
+            # If reasoning_config is not provided but docker sandbox is requested, create one with docker settings
+            if reasoning_config is None and use_docker_sandbox:
+                reasoning_config = ReasoningConfig(
+                    use_docker_sandbox=use_docker_sandbox,
+                    session_id=session_id,
+                    docker_image_name=docker_image_name,
+                    docker_image_tag=docker_image_tag
+                )
+            elif reasoning_config is not None:
+                # Update existing config with docker settings if provided
+                reasoning_config.use_docker_sandbox = use_docker_sandbox
+                reasoning_config.session_id = session_id
+                reasoning_config.docker_image_name = docker_image_name
+                reasoning_config.docker_image_tag = docker_image_tag
+            
             agent = await MCPAgent.create(
                 model_name=model_name,
                 provider_config=provider_config, # Pass loaded provider_config

@@ -10,6 +10,7 @@ import sys
 import traceback
 import json
 import logging
+import os
 from typing import Dict, List, Optional, Any, Tuple, AsyncGenerator, Union
 
 # --- OTEL imports and initialization ---
@@ -20,6 +21,15 @@ _tracer = trace.get_tracer(__name__)
 # --- END OTEL imports and initialization ---
 
 logger = logging.getLogger("dolphin_mcp.reasoning")
+
+# Import docker sandbox interpreter (will be used if enabled via parameter)
+try:
+    from .docker_sandbox import sandboxed_python_interpreter as _docker_interpreter
+    _DOCKER_SANDBOX_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Docker sandbox not available: {e}")
+    _DOCKER_SANDBOX_AVAILABLE = False
+    _docker_interpreter = None
 
 
 def get_reasoning_system_prompt(all_functions: List[Dict] = None) -> str:
@@ -221,19 +231,36 @@ Feedback from the analysis:
 """
 
 
-def python_interpreter(code: str, context: Dict[str, Any]) -> str:
+def python_interpreter(code: str, context: Dict[str, Any], use_docker_sandbox: bool = False, session_id: Optional[str] = None, docker_image_name: str = "dolphin-python-sandbox", docker_image_tag: str = "latest") -> str:
     """
     Execute Python code in a persistent context and return the output.
+    
+    Can use Docker sandbox if use_docker_sandbox=True is set.
+    With Docker sandbox, files created in /tmp inside the container will appear
+    in /tmp/sandboxes/<session_id> on the host.
     
     Based on the python_interpreter function from the example code.
     
     Args:
         code: Python code to execute
         context: Persistent execution context (dictionary of variables)
+        use_docker_sandbox: Whether to use Docker sandbox for execution (default: False)
+        session_id: Session ID for Docker sandbox (optional, will be generated if not provided)
+        docker_image_name: Docker image name to use (default: "dolphin-python-sandbox")
+        docker_image_tag: Docker image tag/version (default: "latest")
         
     Returns:
         String output from the code execution
     """
+    # Use Docker sandbox if enabled and available
+    if use_docker_sandbox and _DOCKER_SANDBOX_AVAILABLE:
+        try:
+            return _docker_interpreter(code, context, session_id=session_id, image_name=docker_image_name, image_tag=docker_image_tag)
+        except Exception as e:
+            logger.error(f"Docker sandbox execution failed, falling back to local exec: {e}")
+            # Fall through to local execution
+    
+    # Local execution (original behavior)
     buf = io.StringIO()
     try:
         old_stdout = sys.stdout
@@ -333,13 +360,21 @@ class ReasoningConfig:
                  enable_planning: bool = True,
                  enable_code_execution: bool = True,
                  planning_model: Optional[str] = None,
-                 reasoning_trace: Any = None
+                 reasoning_trace: Any = None,
+                 use_docker_sandbox: bool = False,
+                 session_id: Optional[str] = None,
+                 docker_image_name: str = "dolphin-python-sandbox",
+                 docker_image_tag: str = "latest"
                  ):
         self.max_iterations = max_iterations
         self.enable_planning = enable_planning
         self.enable_code_execution = enable_code_execution
         self.planning_model = planning_model  # If None, use same model as main reasoning
         self.reasoning_trace = reasoning_trace
+        self.use_docker_sandbox = use_docker_sandbox
+        self.session_id = session_id
+        self.docker_image_name = docker_image_name
+        self.docker_image_tag = docker_image_tag
 
 
 class MultiStepReasoner:
@@ -628,7 +663,14 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                                 py_span.set_attribute("code.block_index", idx)
                                 py_span.set_attribute("code.length", len(code))
                             
-                                output = python_interpreter(code, self.python_context)
+                                output = python_interpreter(
+                                    code, 
+                                    self.python_context,
+                                    use_docker_sandbox=self.config.use_docker_sandbox,
+                                    session_id=self.config.session_id,
+                                    docker_image_name=self.config.docker_image_name,
+                                    docker_image_tag=self.config.docker_image_tag
+                                )
                                 code_outputs.append(output)
                                 self.config.reasoning_trace(f"Code Output: {output}\n")
 
