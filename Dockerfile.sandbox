@@ -1,7 +1,7 @@
-# Minimal Python sandbox environment
+# Optimized Python sandbox environment
 FROM python:3.11-slim
 
-# Install only safe, essential packages for data analysis
+# Install packages and clean up in a single layer to reduce image size
 RUN pip install --no-cache-dir \
     numpy \
     pandas \
@@ -10,17 +10,23 @@ RUN pip install --no-cache-dir \
     scikit-learn \
     pdfplumber \
     pymupdf \
-    pandas \
     python-docx \
     python-pptx \
     openpyxl \
     chardet \
-    python-magic
+    python-magic && \
+    # Remove unnecessary files to reduce size
+    find /usr/local/lib/python3.11 -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/local/lib/python3.11 -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/local/lib/python3.11 -name "*.pyc" -delete && \
+    find /usr/local/lib/python3.11 -name "*.pyo" -delete && \
+    find /usr/local/lib/python3.11 -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    rm -rf /root/.cache
 
-# Create a non-root user for security
+# Create non-root user and set permissions
 RUN useradd -m -u 1000 sandbox && \
-    mkdir -p /tmp && \
-    chown -R sandbox:sandbox /tmp
+    mkdir -p /tmp /sandbox && \
+    chown -R sandbox:sandbox /tmp /sandbox
 
 # Set working directory
 WORKDIR /sandbox
