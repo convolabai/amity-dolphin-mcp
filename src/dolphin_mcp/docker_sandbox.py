@@ -117,18 +117,46 @@ class DockerSandboxExecutor:
         self._ensure_image_exists()
     
     def _ensure_image_exists(self):
-        """Check if the sandbox image exists, build if not."""
+        """Check if the sandbox image exists, pull if not found."""
         try:
             self.docker_client.images.get(self.full_image_name)
+            
             logger.info(f"Using existing Docker image: {self.full_image_name}")
         except docker.errors.ImageNotFound:
-            logger.warning(f"Image {self.full_image_name} not found. Please build it first.")
-            logger.info(f"Run: docker build -f Dockerfile.sandbox -t {self.full_image_name} .")
+            logger.warning(f"Image {self.full_image_name} not found locally. Attempting to pull...")
 
-            raise RuntimeError(
-                f"Docker image '{self.full_image_name}' not found. "
-                f"Build it with: docker build -f Dockerfile.sandbox -t {self.full_image_name} ."
-            )
+            try:
+                logger.info(f"Pulling Docker image: {self.full_image_name}")
+                
+                # Pull with progress tracking
+                for line in self.docker_client.api.pull(self.image_name, tag=self.image_tag, stream=True, decode=True):
+                    if 'status' in line:
+                        status = line['status']
+                        progress_id = line.get('id', '')
+                        progress_detail = line.get('progressDetail', {})
+                        
+                        if progress_detail:
+                            current = progress_detail.get('current', 0)
+                            total = progress_detail.get('total', 0)
+                            if total > 0:
+                                percentage = (current / total) * 100
+                                logger.info(f"{progress_id}: {status} - {percentage:.1f}% ({current}/{total} bytes)")
+                            else:
+                                logger.info(f"{progress_id}: {status}")
+                        else:
+                            if progress_id:
+                                logger.info(f"{progress_id}: {status}")
+                            else:
+                                logger.info(status)
+                
+                logger.info(f"Successfully pulled Docker image: {self.full_image_name}")
+            except docker.errors.APIError as e:
+                logger.error(f"Failed to pull image {self.full_image_name}: {e}")
+                raise RuntimeError(
+                    f"Docker image '{self.full_image_name}' not found locally and could not be pulled.\n"
+                    f"Error: {e}\n"
+                    f"If this is a custom image, build it with: docker build -f Dockerfile.sandbox -t {self.full_image_name} ."
+                )
     
     def execute_code(self, code: str, context: Optional[Dict[str, Any]] = None) -> str:
         """
