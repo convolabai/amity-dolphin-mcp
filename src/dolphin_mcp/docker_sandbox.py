@@ -73,15 +73,37 @@ class DockerSandboxExecutor:
         
         # Initialize Docker client
         try:
-            self.docker_client = docker.from_env()
-
-            # Verify connection by pinging the daemon
-            self.docker_client.ping()
-
+            # On macOS, Docker Desktop uses a different socket location
+            # Try common socket locations
+            docker_client = None
+            socket_locations = [
+                os.path.expanduser("~/.docker/run/docker.sock"),  # macOS Docker Desktop
+                "/var/run/docker.sock",  # Linux/standard location
+            ]
+            
+            # Try to connect using environment variables first
+            try:
+                docker_client = docker.from_env()
+                docker_client.ping()
+            except:
+                # If from_env() fails, try explicit socket locations
+                for socket_path in socket_locations:
+                    if os.path.exists(socket_path):
+                        try:
+                            docker_client = docker.DockerClient(base_url=f"unix://{socket_path}")
+                            docker_client.ping()
+                            break
+                        except:
+                            continue
+            
+            if docker_client is None:
+                raise RuntimeError("Could not connect to Docker daemon")
+            
+            self.docker_client = docker_client
             logger.info(f"Docker client initialized for session {self.session_id}")
+            
         except docker.errors.DockerException as e:
             logger.error(f"Failed to connect to Docker daemon: {e}")
-            
             raise RuntimeError(
                 f"Docker daemon is not available. Please ensure Docker Desktop is running.\n"
                 f"Error: {e}\n"
