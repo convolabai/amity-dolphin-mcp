@@ -34,7 +34,7 @@ class DockerSandboxExecutor:
         self,
         session_id: Optional[str] = None,
         sandbox_base_dir: str = "/tmp/sandboxes",
-        container_mount_path: str = "/sandbox",
+        container_mount_path: str = "/tmp",
         image_name: str = "dolphin-python-sandbox",
         image_tag: str = "latest",
         memory_limit: str = "512m",
@@ -48,7 +48,7 @@ class DockerSandboxExecutor:
         Args:
             session_id: Unique session identifier (generated if not provided)
             sandbox_base_dir: Base directory on host for sandbox volumes
-            container_mount_path: Path inside container where host directory is mounted (default: /sandbox)
+            container_mount_path: Path inside container where host directory is mounted (default: /tmp)
             image_name: Docker image name to use
             image_tag: Docker image tag/version (default: "latest")
             memory_limit: Memory limit (e.g., "512m", "1g")
