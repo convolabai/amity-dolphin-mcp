@@ -177,7 +177,6 @@ class DockerSandboxExecutor:
                 security_opt=["no-new-privileges"],  # Additional security
                 cap_drop=["ALL"],  # Drop all capabilities
                 read_only=False,  # Allow writes to mounted volumes
-                tmpfs={'/tmp': 'size=100M,mode=1777'},  # Writable /tmp with size limit
             )
             
             try:
