@@ -173,8 +173,6 @@ class DockerSandboxExecutor:
                 network_mode=network_mode,
                 mem_limit=self.memory_limit,
                 cpu_quota=self.cpu_quota,
-                stdout=True,
-                stderr=True,
                 user="sandbox",  # Run as non-root user
                 security_opt=["no-new-privileges"],  # Additional security
                 cap_drop=["ALL"],  # Drop all capabilities
