@@ -72,6 +72,9 @@ Step Workflow:
     <python>
     your_python_code
     </python>
+    - CRITICAL: You MUST ALWAYS use the <python>...</python> tags EXACTLY as shown above.
+    - NEVER use markdown code blocks (```python or ```) - these are STRICTLY FORBIDDEN and will be IGNORED.
+    - Any code not wrapped in <python>...</python> tags will NOT be executed.
     - Use `print()` in your code to retain important outputs.
     - The code style should be step by step like a data analyst execute cell by cell in a jupyter notebook.
     - The context of variables will persist between multiple executions.
@@ -283,13 +286,16 @@ def extract_code_blocks(text: str) -> List[str]:
         List of code strings
     """
     code_matches = re.findall(r'<python.*?>\s*(.*?)\s*</python>', text, re.DOTALL | re.IGNORECASE)
+
     # Clean up indentation and return
     cleaned_code = []
+
     for code in code_matches:
         # Remove common leading whitespace (dedent)
         import textwrap
         cleaned = textwrap.dedent(code).strip()
         cleaned_code.append(cleaned)
+        
     return cleaned_code
 
 
