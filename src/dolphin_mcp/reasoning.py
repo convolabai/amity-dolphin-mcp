@@ -252,14 +252,21 @@ def python_interpreter(code: str, context: Dict[str, Any], use_docker_sandbox: b
     Returns:
         String output from the code execution
     """
+
+    logger.info(f"Executing Python code with use_docker_sandbox={use_docker_sandbox} docker available={_DOCKER_SANDBOX_AVAILABLE}")
+
     # Use Docker sandbox if enabled and available
     if use_docker_sandbox and _DOCKER_SANDBOX_AVAILABLE:
         try:
+            logger.info("Using Docker sandbox for code execution")
+
             return _docker_interpreter(code, context, session_id=session_id, image_name=docker_image_name, image_tag=docker_image_tag)
         except Exception as e:
             logger.error(f"Docker sandbox execution failed, falling back to local exec: {e}")
             # Fall through to local execution
     
+    logger.info("Using local execution for code execution")
+
     # Local execution (original behavior)
     buf = io.StringIO()
     try:
