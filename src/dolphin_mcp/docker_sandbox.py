@@ -74,7 +74,19 @@ class DockerSandboxExecutor:
         # Initialize Docker client
         try:
             self.docker_client = docker.from_env()
+
+            # Verify connection by pinging the daemon
+            self.docker_client.ping()
+
             logger.info(f"Docker client initialized for session {self.session_id}")
+        except docker.errors.DockerException as e:
+            logger.error(f"Failed to connect to Docker daemon: {e}")
+            
+            raise RuntimeError(
+                f"Docker daemon is not available. Please ensure Docker Desktop is running.\n"
+                f"Error: {e}\n"
+                f"On macOS, start Docker Desktop from Applications or run: open -a Docker"
+            )
         except Exception as e:
             logger.error(f"Failed to initialize Docker client: {e}")
             raise RuntimeError(f"Docker is not available: {e}")
