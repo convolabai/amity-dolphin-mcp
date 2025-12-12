@@ -34,7 +34,7 @@ class DockerSandboxExecutor:
         self,
         session_id: Optional[str] = None,
         sandbox_base_dir: str = "/tmp/sandboxes",
-        container_mount_path: str = "/tmp",
+        container_mount_base_dir: str = "/tmp/sandboxes",
         image_name: str = "dolphin-python-sandbox",
         image_tag: str = "latest",
         memory_limit: str = "512m",
@@ -48,7 +48,7 @@ class DockerSandboxExecutor:
         Args:
             session_id: Unique session identifier (generated if not provided)
             sandbox_base_dir: Base directory on host for sandbox volumes
-            container_mount_path: Path inside container where host directory is mounted (default: /tmp)
+            container_mount_base_dir: Base directory inside container for mounting (session_id will be appended)
             image_name: Docker image name to use
             image_tag: Docker image tag/version (default: "latest")
             memory_limit: Memory limit (e.g., "512m", "1g")
@@ -58,7 +58,11 @@ class DockerSandboxExecutor:
         """
         self.session_id = session_id or str(uuid.uuid4())
         self.sandbox_base_dir = Path(sandbox_base_dir)
-        self.container_mount_path = container_mount_path
+        self.container_mount_base_dir = Path(container_mount_base_dir)
+        
+        # Session-specific directory and mount path
+        self.session_dir = self.sandbox_base_dir / self.session_id
+        self.container_mount_path = str(self.container_mount_base_dir / self.session_id)
         self.image_name = image_name
         self.image_tag = image_tag
         self.full_image_name = f"{image_name}:{image_tag}"
@@ -68,7 +72,6 @@ class DockerSandboxExecutor:
         self.timeout = timeout
         
         # Create session-specific directory
-        self.session_dir = self.sandbox_base_dir / self.session_id
         self.session_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize Docker client
@@ -129,7 +132,7 @@ class DockerSandboxExecutor:
                 logger.info(f"Pulling Docker image: {self.full_image_name}")
                 
                 # Pull with progress tracking
-                for line in self.docker_client.api.pull(self.image_name, tag=self.image_tag, stream=True, decode=True):
+                for line in self.docker_client.api.pull(self.full_image_name, stream=True, decode=True):
                     if 'status' in line:
                         status = line['status']
                         progress_id = line.get('id', '')
