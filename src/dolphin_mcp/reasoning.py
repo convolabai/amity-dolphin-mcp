@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Any, Tuple, AsyncGenerator, Union
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
-from .docker_sandbox import sandboxed_python_interpreter
+from .docker_sandbox import sandboxed_python_interpreter, validate_imports
 
 _tracer = trace.get_tracer(__name__)
 # --- END OTEL imports and initialization ---
@@ -78,7 +78,21 @@ Step Workflow:
     - Use `print()` in your code to retain important outputs.
     - The code style should be step by step like a data analyst execute cell by cell in a jupyter notebook.
     - The context of variables will persist between multiple executions.
-    - You can only import library with the authorized library as follows: Any.
+    - You can only import libraries from the following authorized list:
+      * Standard Python library modules (sys, os, math, json, datetime, re, etc.)
+      * numpy
+      * pandas
+      * matplotlib
+      * scipy
+      * scikit-learn (import as sklearn)
+      * pdfplumber
+      * pymupdf (import as fitz)
+      * python-docx (import as docx)
+      * python-pptx (import as pptx)
+      * openpyxl
+      * chardet
+      * python-magic (import as magic)
+    - Any attempt to import libraries not in this list will result in an error.
     - The user will execute the code then show you the output of your code, and you will then use that output to continue your reasoning.
 
     **2. Tool Call:**
@@ -261,6 +275,12 @@ def python_interpreter(code: str, context: Dict[str, Any], use_docker_sandbox: b
             # Fall through to local execution
     
     logger.info("Using local execution for code execution")
+
+    # Validate imports before execution (same as Docker sandbox)
+    is_valid, error_message = validate_imports(code)
+    if not is_valid:
+        logger.warning(f"Import validation failed: {error_message}")
+        return f"IMPORT RESTRICTION ERROR:\\n{error_message}"
 
     # Local execution (original behavior)
     buf = io.StringIO()
