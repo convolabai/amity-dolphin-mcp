@@ -11,11 +11,94 @@ import uuid
 import os
 import tempfile
 import traceback
+import ast
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Set
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Allowed libraries for import
+ALLOWED_LIBRARIES = {
+    # Standard library modules (common ones - this is not exhaustive but covers most use cases)
+    'sys', 'os', 'math', 'random', 'datetime', 'time', 'json', 'csv', 'io', 'collections',
+    'itertools', 'functools', 'operator', 're', 'string', 'textwrap', 'unicodedata',
+    'struct', 'codecs', 'base64', 'binascii', 'hashlib', 'hmac', 'secrets',
+    'pathlib', 'glob', 'fnmatch', 'tempfile', 'shutil', 'pickle', 'shelve',
+    'sqlite3', 'gzip', 'bz2', 'lzma', 'zipfile', 'tarfile',
+    'configparser', 'argparse', 'logging', 'warnings', 'traceback',
+    'decimal', 'fractions', 'statistics', 'enum', 'typing', 'copy', 'pprint',
+    'heapq', 'bisect', 'array', 'queue', 'threading', 'multiprocessing',
+    'subprocess', 'socket', 'ssl', 'email', 'urllib', 'http', 'html',
+    'xml', 'webbrowser', 'uuid', 'contextlib', 'abc', 'dataclasses',
+    # Third-party allowed libraries
+    'numpy', 'np',
+    'pandas', 'pd',
+    'matplotlib', 'plt',
+    'scipy',
+    'sklearn', 'scikit-learn',
+    'pdfplumber',
+    'fitz', 'pymupdf',  # pymupdf imports as 'fitz'
+    'docx', 'python-docx',
+    'pptx', 'python-pptx',
+    'openpyxl',
+    'chardet',
+    'magic', 'python-magic',
+}
+
+
+def validate_imports(code: str) -> tuple[bool, str]:
+    """
+    Validate that all imports in the code are from allowed libraries.
+    
+    Args:
+        code: Python code to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+        - is_valid: True if all imports are allowed, False otherwise
+        - error_message: Description of disallowed imports if any
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, f"Syntax error in code: {e}"
+    
+    disallowed_imports = set()
+    
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module_name = alias.name.split('.')[0]  # Get top-level module
+                if module_name not in ALLOWED_LIBRARIES:
+                    disallowed_imports.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                module_name = node.module.split('.')[0]  # Get top-level module
+                if module_name not in ALLOWED_LIBRARIES:
+                    disallowed_imports.add(node.module)
+    
+    if disallowed_imports:
+        allowed_list = ', '.join(sorted(ALLOWED_LIBRARIES))
+        return False, (
+            f"Import restriction violation: The following imports are not allowed: {', '.join(sorted(disallowed_imports))}\n\n"
+            f"Allowed libraries:\n"
+            f"- Standard Python library modules\n"
+            f"- numpy\n"
+            f"- pandas\n"
+            f"- matplotlib\n"
+            f"- scipy\n"
+            f"- scikit-learn (import as sklearn)\n"
+            f"- pdfplumber\n"
+            f"- pymupdf (import as fitz)\n"
+            f"- python-docx (import as docx)\n"
+            f"- python-pptx (import as pptx)\n"
+            f"- openpyxl\n"
+            f"- chardet\n"
+            f"- python-magic (import as magic)"
+        )
+    
+    return True, ""
 
 
 class DockerSandboxExecutor:
@@ -172,6 +255,12 @@ class DockerSandboxExecutor:
         Returns:
             String output from the code execution
         """
+        # Validate imports before execution
+        is_valid, error_message = validate_imports(code)
+        if not is_valid:
+            logger.warning(f"Import validation failed: {error_message}")
+            return f"IMPORT RESTRICTION ERROR:\n{error_message}"
+        
         # Create a temporary Python script
         script_path = self.session_dir / f"script_{uuid.uuid4().hex[:8]}.py"
         
