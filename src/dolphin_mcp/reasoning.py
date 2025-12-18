@@ -10,17 +10,19 @@ import sys
 import traceback
 import json
 import logging
+import os
 from typing import Dict, List, Optional, Any, Tuple, AsyncGenerator, Union
 
 # --- OTEL imports and initialization ---
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from .docker_sandbox import sandboxed_python_interpreter, validate_imports
+
 _tracer = trace.get_tracer(__name__)
 # --- END OTEL imports and initialization ---
 
 logger = logging.getLogger("dolphin_mcp.reasoning")
-
 
 def get_reasoning_system_prompt(all_functions: List[Dict] = None) -> str:
     """
@@ -70,10 +72,27 @@ Step Workflow:
     <python>
     your_python_code
     </python>
+    - CRITICAL: You MUST ALWAYS use the <python>...</python> tags EXACTLY as shown above.
+    - NEVER use markdown code blocks (```python or ```) - these are STRICTLY FORBIDDEN and will be IGNORED.
+    - Any code not wrapped in <python>...</python> tags will NOT be executed.
     - Use `print()` in your code to retain important outputs.
     - The code style should be step by step like a data analyst execute cell by cell in a jupyter notebook.
     - The context of variables will persist between multiple executions.
-    - You can only import library with the authorized library as follows: Any.
+    - You can only import libraries from the following authorized list:
+      * Standard Python library modules (sys, os, math, json, datetime, re, etc.)
+      * numpy
+      * pandas
+      * matplotlib
+      * scipy
+      * scikit-learn (import as sklearn)
+      * pdfplumber
+      * pymupdf (import as fitz)
+      * python-docx (import as docx)
+      * python-pptx (import as pptx)
+      * openpyxl
+      * chardet
+      * python-magic (import as magic)
+    - Any attempt to import libraries not in this list will result in an error.
     - The user will execute the code then show you the output of your code, and you will then use that output to continue your reasoning.
 
     **2. Tool Call:**
@@ -221,19 +240,49 @@ Feedback from the analysis:
 """
 
 
-def python_interpreter(code: str, context: Dict[str, Any]) -> str:
+def python_interpreter(code: str, context: Dict[str, Any], use_docker_sandbox: bool = False, session_id: Optional[str] = None, docker_image_name: str = "dolphin-python-sandbox", docker_image_tag: str = "latest") -> str:
     """
     Execute Python code in a persistent context and return the output.
+    
+    Can use Docker sandbox if use_docker_sandbox=True is set.
+    With Docker sandbox, files created in /tmp inside the container will appear
+    in /tmp/sandboxes/<session_id> on the host.
     
     Based on the python_interpreter function from the example code.
     
     Args:
         code: Python code to execute
         context: Persistent execution context (dictionary of variables)
+        use_docker_sandbox: Whether to use Docker sandbox for execution (default: False)
+        session_id: Session ID for Docker sandbox (optional, will be generated if not provided)
+        docker_image_name: Docker image name to use (default: "dolphin-python-sandbox")
+        docker_image_tag: Docker image tag/version (default: "latest")
         
     Returns:
         String output from the code execution
     """
+
+    logger.info(f"Executing Python code with use_docker_sandbox={use_docker_sandbox}")
+
+    # Use Docker sandbox if enabled and available
+    if use_docker_sandbox:
+        try:
+            logger.info("Using Docker sandbox for code execution")
+
+            return sandboxed_python_interpreter(code, context, session_id=session_id, image_name=docker_image_name, image_tag=docker_image_tag)
+        except Exception as e:
+            logger.error(f"Docker sandbox execution failed, falling back to local exec: {e}")
+            # Fall through to local execution
+    
+    logger.info("Using local execution for code execution")
+
+    # Validate imports before execution (same as Docker sandbox)
+    is_valid, error_message = validate_imports(code)
+    if not is_valid:
+        logger.warning(f"Import validation failed: {error_message}")
+        return f"IMPORT RESTRICTION ERROR:\\n{error_message}"
+
+    # Local execution (original behavior)
     buf = io.StringIO()
     try:
         old_stdout = sys.stdout
@@ -257,13 +306,16 @@ def extract_code_blocks(text: str) -> List[str]:
         List of code strings
     """
     code_matches = re.findall(r'<python.*?>\s*(.*?)\s*</python>', text, re.DOTALL | re.IGNORECASE)
+
     # Clean up indentation and return
     cleaned_code = []
+
     for code in code_matches:
         # Remove common leading whitespace (dedent)
         import textwrap
         cleaned = textwrap.dedent(code).strip()
         cleaned_code.append(cleaned)
+        
     return cleaned_code
 
 
@@ -333,13 +385,21 @@ class ReasoningConfig:
                  enable_planning: bool = True,
                  enable_code_execution: bool = True,
                  planning_model: Optional[str] = None,
-                 reasoning_trace: Any = None
+                 reasoning_trace: Any = None,
+                 use_docker_sandbox: bool = False,
+                 session_id: Optional[str] = None,
+                 docker_image_name: str = "dolphin-python-sandbox",
+                 docker_image_tag: str = "latest"
                  ):
         self.max_iterations = max_iterations
         self.enable_planning = enable_planning
         self.enable_code_execution = enable_code_execution
         self.planning_model = planning_model  # If None, use same model as main reasoning
         self.reasoning_trace = reasoning_trace
+        self.use_docker_sandbox = use_docker_sandbox
+        self.session_id = session_id
+        self.docker_image_name = docker_image_name
+        self.docker_image_tag = docker_image_tag
 
 
 class MultiStepReasoner:
@@ -628,7 +688,14 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                                 py_span.set_attribute("code.block_index", idx)
                                 py_span.set_attribute("code.length", len(code))
                             
-                                output = python_interpreter(code, self.python_context)
+                                output = python_interpreter(
+                                    code, 
+                                    self.python_context,
+                                    use_docker_sandbox=self.config.use_docker_sandbox,
+                                    session_id=self.config.session_id,
+                                    docker_image_name=self.config.docker_image_name,
+                                    docker_image_tag=self.config.docker_image_tag
+                                )
                                 code_outputs.append(output)
                                 self.config.reasoning_trace(f"Code Output: {output}\n")
 
