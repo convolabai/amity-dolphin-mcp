@@ -457,7 +457,16 @@ Please provide *only* the JSON object for the arguments, without any other text 
             self.config.reasoning_trace(f"<error>Failed to parse arguments for {tool_name}: {e}</error>\n")
             return {"error": "Failed to generate valid JSON arguments.", "raw_response": args_text}
 
-    async def generate_plan(self, question: str, guidelines: str, generate_func, model_cfg: Dict, all_functions: List[Dict]) -> str:
+    async def generate_plan(
+        self,
+        question: str,
+        guidelines: str,
+        generate_func,
+        model_cfg: Dict,
+        all_functions: List[Dict],
+        stream: bool = False,
+        quiet_mode: bool = False,
+    ) -> str:
         """
         Generate an initial plan for solving the problem.
         
@@ -467,6 +476,8 @@ Please provide *only* the JSON object for the arguments, without any other text 
             generate_func: Function to generate text with the model
             model_cfg: Model configuration
             all_functions: Available functions/tools
+            stream: Whether to stream chunks (default: False)
+            quiet_mode: Whether to suppress output (default: False)
             
         Returns:
             Generated plan as a string
@@ -502,10 +513,29 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
         ]
         
         try:
-            planning_result = await generate_func(planning_conversation, model_cfg, [], stream=False)
-            plan = planning_result.get("assistant_text", "Failed to generate plan")
-            print(f"Generated plan: {plan}...")
-            return plan
+            if stream:
+                # Use streaming to get chunks and call reasoning_trace for each chunk
+                planning_stream = await generate_func(planning_conversation, model_cfg, [], stream=True)
+
+                # Accumulate the full plan while streaming chunks
+                full_plan = ""
+                async for chunk in planning_stream:
+                    chunk_text = chunk.get("assistant_text", "")
+                    if chunk_text:
+                        full_plan += chunk_text
+                        # Call reasoning_trace for each chunk only (no tags)
+                        if self.config.reasoning_trace and not quiet_mode:
+                            self.config.reasoning_trace(chunk_text)
+
+                if not full_plan:
+                    full_plan = "Failed to generate plan"
+            else:
+                # Non-streaming: get the full response at once
+                planning_result = await generate_func(planning_conversation, model_cfg, [], stream=False)
+                full_plan = planning_result.get("assistant_text", "Failed to generate plan")
+            
+            print(f"Generated plan: {full_plan[:100]}...")
+            return full_plan
         except Exception as e:
             logger.error(f"Error generating plan: {str(e)}")
             return f"Planning failed: {str(e)}. Proceeding with basic approach."
@@ -521,6 +551,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
         process_tool_call_func,
         servers: Dict,
         quiet_mode: bool,
+        stream: bool = False,
     ) -> Tuple[bool, str]:
         """
         Execute the main reasoning loop with code execution and tool calls.
@@ -535,6 +566,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
             process_tool_call_func: Function to process tool calls
             servers: MCP servers dictionary
             quiet_mode: Whether to suppress output
+            stream: Whether to stream chunks (default: False)
             
         Returns:
             Tuple of (success, final_answer_or_error)
@@ -572,6 +604,8 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
         
             # Reset python context for this reasoning session
             self.python_context = {}
+
+            self.config.reasoning_trace("<stepper>\n")
 
             for i in range(self.config.max_iterations):
                 self.config.reasoning_trace(f"<thinking_dot>\n<thinking_title>Step {i + 1}:</thinking_title>\n<thinking_content>\n")
@@ -726,23 +760,23 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                     final_answer = extract_final_answer(assistant_text)
 
                     if final_answer:
-                        self.config.reasoning_trace(f"<final_answer>{final_answer}</final_answer>")
+                        self.config.reasoning_trace(f"\n</stepper>\n<final_answer>{final_answer}</final_answer>")
 
                         return True, f"<final_answer>{final_answer}</final_answer>"
 
                     ask_question = extract_ask_question(assistant_text)
 
                     if ask_question:
-                        self.config.reasoning_trace(f"<ask>{ask_question}</ask>")
+                        self.config.reasoning_trace(f"\n</stepper>\n<ask>{ask_question}</ask>")
 
                         return True, f"<ask>{ask_question}</ask>"
 
                 except Exception as e:
-                    self.config.reasoning_trace(f"<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</thinking_content>\n</thinking_dot>")
+                    self.config.reasoning_trace(f"\n</stepper>\n<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</thinking_content>\n</thinking_dot>")
 
                     return False, f"Error during reasoning: {str(e)}"
         
             # If we reach here, we've hit max iterations without a final answer
-            self.config.reasoning_trace(f"<final_answer>Reached max iterations ({self.config.max_iterations}) without final answer</final_answer>")
+            self.config.reasoning_trace(f"\n</stepper>\n<final_answer>Reached max iterations ({self.config.max_iterations}) without final answer</final_answer>")
 
             return False, f"Process stopped after reaching maximum iterations ({self.config.max_iterations})."
