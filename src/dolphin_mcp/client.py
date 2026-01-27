@@ -445,14 +445,14 @@ all_functions: List[Dict], stream: bool = False) -> Union[Dict, AsyncGenerator]:
 
     if provider == "openai":
         if stream:
-            return generate_with_openai(conversation, model_cfg, all_functions, stream=True)
+            return await generate_with_openai(conversation, model_cfg, all_functions, stream=True)
         else:
             return await generate_with_openai(conversation, model_cfg, all_functions, stream=False)
 
     if provider == "msazureopenai":
         try:
             if stream:
-                return generate_with_msazure_openai(conversation, model_cfg, all_functions, stream=True)
+                return await generate_with_msazure_openai(conversation, model_cfg, all_functions, stream=True)
             else:
                 return await generate_with_msazure_openai(conversation, model_cfg, all_functions, stream=False)
         except Exception as e:
@@ -875,21 +875,28 @@ class MCPAgent:
             The final answer from the reasoning process
         """
         if not self.quiet_mode:
-            self.reasoning_config.reasoning_trace("<thinking_dot>\n<thinking_title>Planning...</thinking_title>\n<thinking_content>\n")
+            self.reasoning_config.reasoning_trace("<planning>\n<planning_title>Planning...</planning_title>\n<planning_content>")
 
-        # Generate initial plan
+        # Generate initial plan (will stream chunks via reasoning_trace if stream=True)
         initial_plan = await self.reasoner.generate_plan(
             user_query,
             guidelines,
             generate_text,
             self.chosen_model,
             self.all_functions,
+            self.stream,
+            self.quiet_mode,
         )
         
         if not self.quiet_mode:
-            log_planning = f"""<plan>{initial_plan}</plan>\n</thinking_content>\n</thinking_dot>"""
-            self.reasoning_config.reasoning_trace(log_planning)
-            # self.reasoning_config.reasoning_trace("Starting execution...")
+            # If streaming, close the <planning_content> tag after generating
+            if self.stream:
+                self.reasoning_config.reasoning_trace("</planning_content>")
+            else:
+                # If not streaming, send the full plan with tags
+                self.reasoning_config.reasoning_trace(f"{initial_plan}</planning_content>")
+            
+            self.reasoning_config.reasoning_trace("\n</planning>\n")
         
         # Execute the reasoning loop
         success, result = await self.reasoner.execute_reasoning_loop(
@@ -928,7 +935,7 @@ class MCPAgent:
         # Determine if we should use reasoning mode
         should_use_reasoning = use_reasoning if use_reasoning is not None else self.reasoning_config.enable_planning
         
-        if should_use_reasoning and not self.stream:
+        if should_use_reasoning:
             # Use the new multi-step reasoning approach
             return await self.prompt_with_reasoning(user_query, guidelines)
         else:

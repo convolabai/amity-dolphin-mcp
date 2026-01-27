@@ -10,21 +10,35 @@ from openai import AsyncOpenAI, APIError, RateLimitError
 
 async def generate_with_openai_stream(client: AsyncOpenAI, model_name: str, conversation: List[Dict],
                                     formatted_functions: List[Dict], temperature: Optional[float] = None,
-                                    top_p: Optional[float] = None, max_tokens: Optional[int] = None) -> AsyncGenerator:
+                                    top_p: Optional[float] = None, max_tokens: Optional[int] = None,
+                                    is_reasoning: bool = False, reasoning_effort: Optional[str] = "medium") -> AsyncGenerator:
     """Internal function for streaming generation"""
     try:
         print(f"Starting OpenAI streaming generation with model '{model_name}'")
 
-        response = await client.chat.completions.create(
-            model=model_name,
-            messages=conversation,
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-            tools=[{"type": "function", "function": f} for f in formatted_functions],
-            tool_choice="auto",
-            stream=True
-        )
+        if is_reasoning:
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=conversation,
+                response_format={
+                    "type": "text"
+                },
+                reasoning_effort=reasoning_effort,
+                tools=[{"type": "function", "function": f} for f in formatted_functions],
+                tool_choice="auto",
+                stream=True
+            )
+        else:
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=conversation,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                tools=[{"type": "function", "function": f} for f in formatted_functions],
+                tool_choice="auto",
+                stream=True
+            )
 
         current_tool_calls = []
         current_content = ""
@@ -256,7 +270,7 @@ async def generate_with_openai(conversation: List[Dict], model_cfg: Dict,
     if stream:
         return generate_with_openai_stream(
             client, model_name, conversation, formatted_functions,
-            temperature, top_p, max_tokens
+            temperature, top_p, max_tokens, is_reasoning, reasoning_effort
         )
     else:
         return await generate_with_openai_sync(
