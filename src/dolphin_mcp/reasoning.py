@@ -626,7 +626,15 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                         assistant_text = result.get("assistant_text", "")
 
                         gen_span.set_attribute("llm.response_length", len(assistant_text))
+                    
+                    # Check for final answer
+                    final_answer = extract_final_answer(assistant_text)
 
+                    # If final answer found, return it
+                    if final_answer:
+                        self.config.reasoning_trace(f"DONE\n</thinking_content>\n</thinking_dot></stepper>\n<final_answer>{final_answer}</final_answer>")
+                        return True, f"<final_answer>{final_answer}</final_answer>"
+                    
                     self.config.reasoning_trace(f"{assistant_text}\n")
                 
                     # Add assistant message to conversation
@@ -702,7 +710,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                                 conversation.append({"role": "user", "content": f"<tool_output>\n{result['content']}\n</tool_output>"})
                     
                         # Close thinking tags before continuing to next iteration
-                        self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
+                        self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
                         continue
 
                     # Execute Python code if present
@@ -712,7 +720,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                     if code_blocks and self.config.enable_code_execution:
                         logger.info(f"Executing {code_blocks}")
                         for idx, code in enumerate(code_blocks):
-                            self.config.reasoning_trace(f"Executing code: {code}\n")
+                            self.config.reasoning_trace(f"Executing code: <python>{code}</python>\n")
 
                             with _tracer.start_as_current_span(
                                 "dolphin_mcp.reasoning.python_code_execution",
@@ -743,26 +751,18 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                             "content": f"<code_output>\n{combined_output}\n</code_output>"
                         })
                         # Close thinking tags before continuing to next iteration
-                        self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
+                        self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
                         continue
                 
                     # If no code and no tool calls, we might be stuck
                     if not code_blocks and not tool_calls:
-                        no_code_output_msg = f"""No code execution or tool calls detected\n"""
+                        no_code_output_msg = """No code execution or tool calls detected\n"""
                         # self.config.reasoning_trace(no_code_output_msg)
                         conversation.append({"role": "user", "content": f"<no_code_output>{no_code_output_msg}</no_code_output>"})
 
-                    conversation.append({"role": "user", "content": f"""Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>"."""})
+                    conversation.append({"role": "user", "content": """Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>"."""})
 
-                    self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
-
-                    # Check for final answer
-                    final_answer = extract_final_answer(assistant_text)
-
-                    if final_answer:
-                        self.config.reasoning_trace(f"\n</stepper>\n<final_answer>{final_answer}</final_answer>")
-
-                        return True, f"<final_answer>{final_answer}</final_answer>"
+                    self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
 
                     ask_question = extract_ask_question(assistant_text)
 
