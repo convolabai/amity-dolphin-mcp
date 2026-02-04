@@ -121,6 +121,7 @@ Rules:
  - Utilize both tool calls and code execution together to maximize efficiency.
  - Choose only one action per step, either a tool call, Python code execution, or final answer.
  - If you need to use tags, only use <final_answer>...</final_answer>, <ask>...</ask>, <tool_code>...</tool_code>, <python>...</python>, and <monitor>...</monitor> tags as per the context.
+   - CRUCIAL: Do not omit the closing tag. The response is considered incomplete and failed without it.
  """
 
 
@@ -635,6 +636,13 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                         self.config.reasoning_trace(f"DONE\n</thinking_content>\n</thinking_dot></stepper>\n<final_answer>{final_answer}</final_answer>")
                         return True, f"<final_answer>{final_answer}</final_answer>"
                     
+                    ask_question = extract_ask_question(assistant_text)
+
+                    if ask_question:
+                        self.config.reasoning_trace(f"DONE\n</thinking_content>\n</thinking_dot></stepper>\n<ask>{ask_question}</ask>")
+
+                        return True, f"<ask>{ask_question}</ask>"
+                    
                     self.config.reasoning_trace(f"{assistant_text}\n")
                 
                     # Add assistant message to conversation
@@ -764,15 +772,8 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
 
                     self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
 
-                    ask_question = extract_ask_question(assistant_text)
-
-                    if ask_question:
-                        self.config.reasoning_trace(f"\n</stepper>\n<ask>{ask_question}</ask>")
-
-                        return True, f"<ask>{ask_question}</ask>"
-
                 except Exception as e:
-                    self.config.reasoning_trace(f"\n</stepper>\n<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</thinking_content>\n</thinking_dot>")
+                    self.config.reasoning_trace(f"\n<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</thinking_content>\n</thinking_dot>\n</stepper>")
 
                     return False, f"Error during reasoning: {str(e)}"
         
