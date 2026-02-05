@@ -103,6 +103,15 @@ Step Workflow:
     ...Your complete explanation goes here....
     </final_answer>
 
+    **CRITICAL TAG REQUIREMENTS:**
+    - Every opening tag MUST have a corresponding closing tag.
+    - `<final_answer>` MUST be closed with `</final_answer>`
+    - `<python>` MUST be closed with `</python>`
+    - `<tool_code>` MUST be closed with `</tool_code>`
+    - `<ask>` MUST be closed with `</ask>`
+    - A response with an unclosed tag is INVALID and will be REJECTED.
+    - ALWAYS write the closing tag IMMEDIATELY after your content.
+
  3. Observation: After you provide a `<python>...</python>` or `<tool_code>...</tool_code>` action, you will receive an observation from the system containing the output. Use this to inform your next step. If you provide `<final_answer>...</final_answer>`, the process ends.
 
 Rules:
@@ -122,6 +131,8 @@ Rules:
  - Choose only one action per step, either a tool call, Python code execution, or final answer.
  - If you need to use tags, only use <final_answer>...</final_answer>, <ask>...</ask>, <tool_code>...</tool_code>, <python>...</python>, and <monitor>...</monitor> tags as per the context.
    - CRUCIAL: Do not omit the closing tag. The response is considered incomplete and failed without it.
+   - REMINDER: When writing <final_answer>, you MUST end with </final_answer>. Example: <final_answer>Your answer here</final_answer>
+   - NEVER truncate or leave a tag unclosed. Always complete your response with the proper closing tag.
  """
 
 
@@ -351,12 +362,20 @@ def extract_final_answer(text: str) -> Optional[str]:
     Returns:
         Final answer string if found, None otherwise
     """
+    # First, try to match properly closed tags
     final_answer_matches = re.findall(r'<final_answer.*?>\s*(.*?)\s*</final_answer>', text, re.DOTALL | re.IGNORECASE)
 
     if final_answer_matches:
         return final_answer_matches[-1].strip()
 
-    # monitor_matches = re.findall(r'<monitor.*?>\s*(.*?)\s*</monitor>', text, re.DOTALL | re.IGNORECASE)
+    # Fallback: Handle incomplete/unclosed <final_answer> tags
+    # This catches cases where the LLM forgets to close the tag
+    unclosed_match = re.search(r'<final_answer.*?>\s*(.*?)$', text, re.DOTALL | re.IGNORECASE)
+    if unclosed_match:
+        content = unclosed_match.group(1).strip()
+        if content:  # Only return if there's actual content
+            logger.warning(f"Found unclosed <final_answer> tag, extracting content anyway")
+            return content
 
     return None
 
@@ -522,7 +541,8 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                 full_plan = ""
                 async for chunk in planning_stream:
                     chunk_text = chunk.get("assistant_text", "")
-                    if chunk_text:
+                    is_chunk = chunk.get("is_chunk", False)
+                    if chunk_text and is_chunk:
                         full_plan += chunk_text
                         # Call reasoning_trace for each chunk only (no tags)
                         if self.config.reasoning_trace and not quiet_mode:
