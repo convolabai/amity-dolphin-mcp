@@ -220,13 +220,13 @@ def get_user_prompt_initial(question: str, answer_guideline: str, feedback: str)
     
     Based on user_prompt_initial from the example code.
     """
+
     return f"""
 Here is the user enquiry:
 - {question}
 
 Here is the guidelines:
 - {answer_guideline}
-
 Here is the summary context and plan from human expert:
 ```plan
 {feedback}
@@ -440,7 +440,7 @@ class MultiStepReasoner:
         """
         Asks the LLM to generate arguments for a tool call.
         """
-        self.config.reasoning_trace(f"Asking LLM to generate arguments for tool: {tool_name}\n")
+        self.config.reasoning_trace(f"Asking LLM to generate arguments for tool: `{tool_name}`\n\n")
 
         prompt_content = f"""You have decided to call the tool `{tool_name}`.
 Based on the conversation history, please provide the arguments for this tool.
@@ -460,7 +460,7 @@ Please provide *only* the JSON object for the arguments, without any other text 
         args_result = await generate_func(args_conversation, model_cfg, [], stream=False)
         args_text = args_result.get("assistant_text", "").strip()
 
-        self.config.reasoning_trace(f"LLM generated arguments: {args_text}\n")
+        self.config.reasoning_trace(f"LLM generated arguments: \n```\n{args_text}\n```\n\n")
 
         # Parse the arguments
         try:
@@ -474,7 +474,7 @@ Please provide *only* the JSON object for the arguments, without any other text 
                 raise json.JSONDecodeError("Not a JSON object", args_text, 0)
             return parsed_args
         except (json.JSONDecodeError, AttributeError) as e:
-            self.config.reasoning_trace(f"<error>Failed to parse arguments for {tool_name}: {e}</error>\n")
+            self.config.reasoning_trace(f"<error>Failed to parse arguments for `{tool_name}`: {e}</error>\n\n")
             return {"error": "Failed to generate valid JSON arguments.", "raw_response": args_text}
 
     async def generate_plan(
@@ -648,32 +648,69 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
 
                         gen_span.set_attribute("llm.response_length", len(assistant_text))
                     
-                    # Check for final answer
+                    # If final answer found, immediately end reasoning
                     final_answer = extract_final_answer(assistant_text)
-
-                    # If final answer found, return it
                     if final_answer:
                         self.config.reasoning_trace(f"DONE\n</thinking_content>\n</thinking_dot></stepper>\n<final_answer>{final_answer}</final_answer>")
                         return True, f"<final_answer>{final_answer}</final_answer>"
                     
+                    # If ask question found, immediately end reasoning
                     ask_question = extract_ask_question(assistant_text)
-
                     if ask_question:
                         self.config.reasoning_trace(f"DONE\n</thinking_content>\n</thinking_dot></stepper>\n<ask>{ask_question}</ask>")
 
                         return True, f"<ask>{ask_question}</ask>"
                     
-                    self.config.reasoning_trace(f"{assistant_text}\n")
-                
                     # Add assistant message to conversation
                     assistant_msg = {"role": "assistant", "content": assistant_text}
                     conversation.append(assistant_msg)
+                    
+                    # Execute Python code if present, then continue to next iteration immediately
+                    code_blocks = extract_code_blocks(assistant_text)
+                    code_outputs = []
 
-                    # Process tool calls if any
+                    if code_blocks and self.config.enable_code_execution:
+                        logger.info(f"Executing {code_blocks}")
+                        for idx, code in enumerate(code_blocks):
+                            self.config.reasoning_trace(f"Executing code:\n<python>\n{code}\n</python>\n")
+
+                            with _tracer.start_as_current_span(
+                                "dolphin_mcp.reasoning.python_code_execution",
+                                kind=SpanKind.INTERNAL,
+                            ) as py_span:
+                                py_span.set_attribute("reasoning.step_index", i + 1)
+                                py_span.set_attribute("code.block_index", idx)
+                                py_span.set_attribute("code.length", len(code))
+                            
+                                output = python_interpreter(
+                                    code, 
+                                    self.python_context,
+                                    use_docker_sandbox=self.config.use_docker_sandbox,
+                                    session_id=self.config.session_id,
+                                    docker_image_name=self.config.docker_image_name,
+                                    docker_image_tag=self.config.docker_image_tag
+                                )
+                                code_outputs.append(output)
+                                self.config.reasoning_trace(f"Code Output: \n```\n{output}\n```\n")
+
+                                py_span.set_attribute("code.output_length", len(output))
+
+                    # If we have code outputs, add them to the conversation
+                    if code_outputs:
+                        combined_output = "\n".join(code_outputs)
+                        conversation.append({
+                            "role": "user",
+                            "content": f"<code_output>\n{combined_output}\n</code_output>"
+                        })
+                        # Close thinking tags before continuing to next iteration
+                        self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
+                        continue
+                    
+                    # Process tool calls if any, then continue to next iteration immediately
                     tool_calls = extract_tool_calls(assistant_text)
                     if tool_calls:
                         for tc_data in tool_calls:
-                            self.config.reasoning_trace(f"Processing tool call: {tc_data.get('name', 'unknown')}\n")
+                            self.config.reasoning_trace(f"Processing tool call: `{tc_data.get('name', 'unknown')}`\n")
                             tool_name = tc_data.get("name")
                             if not tool_name:
                                 continue
@@ -682,7 +719,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                             full_function_def = next((f for f in all_functions if f['name'] == tool_name), None)
 
                             if not full_function_def:
-                                error_content = f"<error>Error calling tool {tool_name}: Tool not found.</error>"
+                                error_content = f"<error>Error calling tool `{tool_name}`: Tool not found.</error>"
                                 self.config.reasoning_trace(f"{error_content}\n")
                                 conversation.append(
                                     {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -694,7 +731,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                             )
 
                             if "error" in tool_args:
-                                error_content = f"<error>Error calling tool {tool_name}: {tool_args['error']} Raw response: {tool_args['raw_response']}</error>"
+                                error_content = f"<error>Error calling tool `{tool_name}`: {tool_args['error']} Raw response: {tool_args['raw_response']}</error>"
                                 self.config.reasoning_trace(f"{error_content}\n")
                                 conversation.append(
                                     {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -705,7 +742,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                             required_params = schema.get("required", [])
                             missing_params = [p for p in required_params if p not in tool_args]
                             if missing_params:
-                                error_content = f"<error>Error calling tool {tool_name}: Missing required parameters after generation: {', '.join(missing_params)}</error>"
+                                error_content = f"<error>Error calling tool `{tool_name}`: Missing required parameters after generation: {', '.join(missing_params)}</error>"
                                 self.config.reasoning_trace(f"{error_content}\n")
                                 conversation.append(
                                     {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -734,54 +771,15 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                                         tool_span.set_attribute("tool.output_length", len(result["content"]))
 
                             if result and 'content' in result:
-                                self.config.reasoning_trace(f"Tool call output: {result['content']}\n")
+                                self.config.reasoning_trace(f"Tool call output: \n```\n{result['content']}\n```\n")
                                 conversation.append({"role": "user", "content": f"<tool_output>\n{result['content']}\n</tool_output>"})
                     
                         # Close thinking tags before continuing to next iteration
                         self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
                         continue
 
-                    # Execute Python code if present
-                    code_blocks = extract_code_blocks(assistant_text)
-                    code_outputs = []
+                    self.config.reasoning_trace(f"{assistant_text}\n")
 
-                    if code_blocks and self.config.enable_code_execution:
-                        logger.info(f"Executing {code_blocks}")
-                        for idx, code in enumerate(code_blocks):
-                            self.config.reasoning_trace(f"Executing code: <python>{code}</python>\n")
-
-                            with _tracer.start_as_current_span(
-                                "dolphin_mcp.reasoning.python_code_execution",
-                                kind=SpanKind.INTERNAL,
-                            ) as py_span:
-                                py_span.set_attribute("reasoning.step_index", i + 1)
-                                py_span.set_attribute("code.block_index", idx)
-                                py_span.set_attribute("code.length", len(code))
-                            
-                                output = python_interpreter(
-                                    code, 
-                                    self.python_context,
-                                    use_docker_sandbox=self.config.use_docker_sandbox,
-                                    session_id=self.config.session_id,
-                                    docker_image_name=self.config.docker_image_name,
-                                    docker_image_tag=self.config.docker_image_tag
-                                )
-                                code_outputs.append(output)
-                                self.config.reasoning_trace(f"Code Output: {output}\n")
-
-                                py_span.set_attribute("code.output_length", len(output))
-
-                    # If we have code outputs, add them to the conversation
-                    if code_outputs:
-                        combined_output = "\n".join(code_outputs)
-                        conversation.append({
-                            "role": "user",
-                            "content": f"<code_output>\n{combined_output}\n</code_output>"
-                        })
-                        # Close thinking tags before continuing to next iteration
-                        self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
-                        continue
-                
                     # If no code and no tool calls, we might be stuck
                     if not code_blocks and not tool_calls:
                         no_code_output_msg = """No code execution or tool calls detected\n"""
