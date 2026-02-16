@@ -566,6 +566,8 @@ def process_long_fields(tool_result: Any, max_length: int = 15000, session_id: O
         with f:
             json.dump(result, f, indent=2)
             temp_file_path = f.name
+        # Make the file world-readable so the Docker sandbox user can access it
+        os.chmod(temp_file_path, 0o644)
         
         logger.info(f"Tool response contains long fields, full response written to: {temp_file_path}")
         
