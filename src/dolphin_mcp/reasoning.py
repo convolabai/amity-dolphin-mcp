@@ -763,7 +763,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                                 tool_span.set_attribute("tool.name", tool_name)
                                 tool_span.set_attribute("tool.args", json.dumps(tool_args)[:512])
                                 
-                                result = await process_tool_call_func(fake_tc, servers, quiet_mode)
+                                result = await process_tool_call_func(fake_tc, servers, quiet_mode, session_id=self.config.session_id)
 
                                 if isinstance(result, dict):
                                     tool_span.set_attribute("tool.success", "error" not in result)

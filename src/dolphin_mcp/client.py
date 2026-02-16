@@ -508,13 +508,15 @@ async def log_messages_to_file(messages: List[Dict], functions: List[Dict], log_
     except Exception as e:
         logger.error(f"Error logging messages to {log_path}: {str(e)}")
 
-def process_long_fields(tool_result: Any, max_length: int = 15000) -> Any:
+def process_long_fields(tool_result: Any, max_length: int = 15000, session_id: Optional[str] = None, sandbox_base_dir: str = "/tmp/sandboxes") -> Any:
     """
     Process tool result and replace long string fields with file references.
     
     Args:
-        result: The tool result (can be dict, list, or any JSON-serializable value)
+        tool_result: The tool result (can be dict, list, or any JSON-serializable value)
         max_length: Maximum length for string fields before writing to file
+        session_id: Optional session ID to write temp files into the sandbox directory
+        sandbox_base_dir: Base directory for sandbox volumes (default: /tmp/sandboxes)
         
     Returns:
         Modified result with long fields replaced by file references
@@ -554,7 +556,14 @@ def process_long_fields(tool_result: Any, max_length: int = 15000) -> Any:
     
     # If we found long fields, write the original result to a temp file
     try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        if session_id:
+            # Write to the session's sandbox directory, aligned with docker_sandbox paths
+            session_dir = os.path.join(sandbox_base_dir, session_id)
+            os.makedirs(session_dir, exist_ok=True)
+            f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, dir=session_dir)
+        else:
+            f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        with f:
             json.dump(result, f, indent=2)
             temp_file_path = f.name
         
@@ -584,7 +593,7 @@ def process_long_fields(tool_result: Any, max_length: int = 15000) -> Any:
         logger.error(f"Error processing long fields: {str(e)}")
         return tool_result
 
-async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode: bool) -> Optional[Dict]:
+async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode: bool, session_id: Optional[str] = None) -> Optional[Dict]:
     """Process a single tool call and return the result"""
     func_name = tc["function"]["name"]
     func_args_str = tc["function"].get("arguments", "{}")
@@ -640,7 +649,7 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
     #     print(json.dumps(result, indent=2))
 
     # Process the result to handle long fields
-    processed_result = process_long_fields(result)
+    processed_result = process_long_fields(result, session_id=session_id)
 
     return {
         "role": "tool",
@@ -994,7 +1003,7 @@ class MCPAgent:
                                     # Process each tool call
                                     for tc in tool_calls:
                                         if tc.get("function", {}).get("name"):
-                                            result = await process_tool_call(tc, self.servers, self.quiet_mode)
+                                            result = await process_tool_call(tc, self.servers, self.quiet_mode, session_id=getattr(self.reasoning_config, 'session_id', None))
                                             if result:
                                                 self.conversation.append(result)
                                                 tool_calls_processed = True
@@ -1030,7 +1039,7 @@ class MCPAgent:
                         break
 
                     for tc in tool_calls:
-                        result = await process_tool_call(tc, self.servers, self.quiet_mode)
+                        result = await process_tool_call(tc, self.servers, self.quiet_mode, session_id=getattr(self.reasoning_config, 'session_id', None))
                         if result:
                             self.conversation.append(result)
                             logger.info(f"Added tool result: {json.dumps(result, indent=2)}")
