@@ -103,6 +103,15 @@ Step Workflow:
     ...Your complete explanation goes here....
     </final_answer>
 
+    **CRITICAL TAG REQUIREMENTS:**
+    - Every opening tag MUST have a corresponding closing tag.
+    - `<final_answer>` MUST be closed with `</final_answer>`
+    - `<python>` MUST be closed with `</python>`
+    - `<tool_code>` MUST be closed with `</tool_code>`
+    - `<ask>` MUST be closed with `</ask>`
+    - A response with an unclosed tag is INVALID and will be REJECTED.
+    - ALWAYS write the closing tag IMMEDIATELY after your content.
+
  3. Observation: After you provide a `<python>...</python>` or `<tool_code>...</tool_code>` action, you will receive an observation from the system containing the output. Use this to inform your next step. If you provide `<final_answer>...</final_answer>`, the process ends.
 
 Rules:
@@ -121,6 +130,9 @@ Rules:
  - Utilize both tool calls and code execution together to maximize efficiency.
  - Choose only one action per step, either a tool call, Python code execution, or final answer.
  - If you need to use tags, only use <final_answer>...</final_answer>, <ask>...</ask>, <tool_code>...</tool_code>, <python>...</python>, and <monitor>...</monitor> tags as per the context.
+   - CRUCIAL: Do not omit the closing tag. The response is considered incomplete and failed without it.
+   - REMINDER: When writing <final_answer>, you MUST end with </final_answer>. Example: <final_answer>Your answer here</final_answer>
+   - NEVER truncate or leave a tag unclosed. Always complete your response with the proper closing tag.
  """
 
 
@@ -208,13 +220,13 @@ def get_user_prompt_initial(question: str, answer_guideline: str, feedback: str)
     
     Based on user_prompt_initial from the example code.
     """
+
     return f"""
 Here is the user enquiry:
 - {question}
 
 Here is the guidelines:
 - {answer_guideline}
-
 Here is the summary context and plan from human expert:
 ```plan
 {feedback}
@@ -350,12 +362,20 @@ def extract_final_answer(text: str) -> Optional[str]:
     Returns:
         Final answer string if found, None otherwise
     """
+    # First, try to match properly closed tags
     final_answer_matches = re.findall(r'<final_answer.*?>\s*(.*?)\s*</final_answer>', text, re.DOTALL | re.IGNORECASE)
 
     if final_answer_matches:
         return final_answer_matches[-1].strip()
 
-    # monitor_matches = re.findall(r'<monitor.*?>\s*(.*?)\s*</monitor>', text, re.DOTALL | re.IGNORECASE)
+    # Fallback: Handle incomplete/unclosed <final_answer> tags
+    # This catches cases where the LLM forgets to close the tag
+    unclosed_match = re.search(r'<final_answer.*?>\s*(.*?)$', text, re.DOTALL | re.IGNORECASE)
+    if unclosed_match:
+        content = unclosed_match.group(1).strip()
+        if content:  # Only return if there's actual content
+            logger.warning(f"Found unclosed <final_answer> tag, extracting content anyway")
+            return content
 
     return None
 
@@ -420,7 +440,7 @@ class MultiStepReasoner:
         """
         Asks the LLM to generate arguments for a tool call.
         """
-        self.config.reasoning_trace(f"Asking LLM to generate arguments for tool: {tool_name}\n")
+        self.config.reasoning_trace(f"Asking LLM to generate arguments for tool: `{tool_name}`\n\n")
 
         prompt_content = f"""You have decided to call the tool `{tool_name}`.
 Based on the conversation history, please provide the arguments for this tool.
@@ -440,7 +460,7 @@ Please provide *only* the JSON object for the arguments, without any other text 
         args_result = await generate_func(args_conversation, model_cfg, [], stream=False)
         args_text = args_result.get("assistant_text", "").strip()
 
-        self.config.reasoning_trace(f"LLM generated arguments: {args_text}\n")
+        self.config.reasoning_trace(f"LLM generated arguments: \n```\n{args_text}\n```\n\n")
 
         # Parse the arguments
         try:
@@ -454,10 +474,19 @@ Please provide *only* the JSON object for the arguments, without any other text 
                 raise json.JSONDecodeError("Not a JSON object", args_text, 0)
             return parsed_args
         except (json.JSONDecodeError, AttributeError) as e:
-            self.config.reasoning_trace(f"<error>Failed to parse arguments for {tool_name}: {e}</error>\n")
+            self.config.reasoning_trace(f"<error>Failed to parse arguments for `{tool_name}`: {e}</error>\n\n")
             return {"error": "Failed to generate valid JSON arguments.", "raw_response": args_text}
 
-    async def generate_plan(self, question: str, guidelines: str, generate_func, model_cfg: Dict, all_functions: List[Dict]) -> str:
+    async def generate_plan(
+        self,
+        question: str,
+        guidelines: str,
+        generate_func,
+        model_cfg: Dict,
+        all_functions: List[Dict],
+        stream: bool = False,
+        quiet_mode: bool = False,
+    ) -> str:
         """
         Generate an initial plan for solving the problem.
         
@@ -467,6 +496,8 @@ Please provide *only* the JSON object for the arguments, without any other text 
             generate_func: Function to generate text with the model
             model_cfg: Model configuration
             all_functions: Available functions/tools
+            stream: Whether to stream chunks (default: False)
+            quiet_mode: Whether to suppress output (default: False)
             
         Returns:
             Generated plan as a string
@@ -502,10 +533,30 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
         ]
         
         try:
-            planning_result = await generate_func(planning_conversation, model_cfg, [], stream=False)
-            plan = planning_result.get("assistant_text", "Failed to generate plan")
-            print(f"Generated plan: {plan}...")
-            return plan
+            if stream:
+                # Use streaming to get chunks and call reasoning_trace for each chunk
+                planning_stream = await generate_func(planning_conversation, model_cfg, [], stream=True)
+
+                # Accumulate the full plan while streaming chunks
+                full_plan = ""
+                async for chunk in planning_stream:
+                    chunk_text = chunk.get("assistant_text", "")
+                    is_chunk = chunk.get("is_chunk", False)
+                    if chunk_text and is_chunk:
+                        full_plan += chunk_text
+                        # Call reasoning_trace for each chunk only (no tags)
+                        if self.config.reasoning_trace and not quiet_mode:
+                            self.config.reasoning_trace(chunk_text)
+
+                if not full_plan:
+                    full_plan = "Failed to generate plan"
+            else:
+                # Non-streaming: get the full response at once
+                planning_result = await generate_func(planning_conversation, model_cfg, [], stream=False)
+                full_plan = planning_result.get("assistant_text", "Failed to generate plan")
+            
+            print(f"Generated plan: {full_plan[:100]}...")
+            return full_plan
         except Exception as e:
             logger.error(f"Error generating plan: {str(e)}")
             return f"Planning failed: {str(e)}. Proceeding with basic approach."
@@ -521,6 +572,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
         process_tool_call_func,
         servers: Dict,
         quiet_mode: bool,
+        stream: bool = False,
     ) -> Tuple[bool, str]:
         """
         Execute the main reasoning loop with code execution and tool calls.
@@ -535,6 +587,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
             process_tool_call_func: Function to process tool calls
             servers: MCP servers dictionary
             quiet_mode: Whether to suppress output
+            stream: Whether to stream chunks (default: False)
             
         Returns:
             Tuple of (success, final_answer_or_error)
@@ -573,6 +626,8 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
             # Reset python context for this reasoning session
             self.python_context = {}
 
+            self.config.reasoning_trace("<stepper>\n")
+
             for i in range(self.config.max_iterations):
                 self.config.reasoning_trace(f"<thinking_dot>\n<thinking_title>Step {i + 1}:</thinking_title>\n<thinking_content>\n")
 
@@ -592,18 +647,70 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                         assistant_text = result.get("assistant_text", "")
 
                         gen_span.set_attribute("llm.response_length", len(assistant_text))
+                    
+                    # If final answer found, immediately end reasoning
+                    final_answer = extract_final_answer(assistant_text)
+                    if final_answer:
+                        self.config.reasoning_trace(f"DONE\n</thinking_content>\n</thinking_dot></stepper>\n<final_answer>{final_answer}</final_answer>")
+                        return True, f"<final_answer>{final_answer}</final_answer>"
+                    
+                    # If ask question found, immediately end reasoning
+                    ask_question = extract_ask_question(assistant_text)
+                    if ask_question:
+                        self.config.reasoning_trace(f"DONE\n</thinking_content>\n</thinking_dot></stepper>\n<ask>{ask_question}</ask>")
 
-                    self.config.reasoning_trace(f"{assistant_text}\n")
-                
+                        return True, f"<ask>{ask_question}</ask>"
+                    
                     # Add assistant message to conversation
                     assistant_msg = {"role": "assistant", "content": assistant_text}
                     conversation.append(assistant_msg)
+                    
+                    # Execute Python code if present, then continue to next iteration immediately
+                    code_blocks = extract_code_blocks(assistant_text)
+                    code_outputs = []
 
-                    # Process tool calls if any
+                    if code_blocks and self.config.enable_code_execution:
+                        logger.info(f"Executing {code_blocks}")
+                        for idx, code in enumerate(code_blocks):
+                            self.config.reasoning_trace(f"Executing code:\n<python>\n{code}\n</python>\n")
+
+                            with _tracer.start_as_current_span(
+                                "dolphin_mcp.reasoning.python_code_execution",
+                                kind=SpanKind.INTERNAL,
+                            ) as py_span:
+                                py_span.set_attribute("reasoning.step_index", i + 1)
+                                py_span.set_attribute("code.block_index", idx)
+                                py_span.set_attribute("code.length", len(code))
+                            
+                                output = python_interpreter(
+                                    code, 
+                                    self.python_context,
+                                    use_docker_sandbox=self.config.use_docker_sandbox,
+                                    session_id=self.config.session_id,
+                                    docker_image_name=self.config.docker_image_name,
+                                    docker_image_tag=self.config.docker_image_tag
+                                )
+                                code_outputs.append(output)
+                                self.config.reasoning_trace(f"Code Output: \n```\n{output}\n```\n")
+
+                                py_span.set_attribute("code.output_length", len(output))
+
+                    # If we have code outputs, add them to the conversation
+                    if code_outputs:
+                        combined_output = "\n".join(code_outputs)
+                        conversation.append({
+                            "role": "user",
+                            "content": f"<code_output>\n{combined_output}\n</code_output>"
+                        })
+                        # Close thinking tags before continuing to next iteration
+                        self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
+                        continue
+                    
+                    # Process tool calls if any, then continue to next iteration immediately
                     tool_calls = extract_tool_calls(assistant_text)
                     if tool_calls:
                         for tc_data in tool_calls:
-                            self.config.reasoning_trace(f"Processing tool call: {tc_data.get('name', 'unknown')}\n")
+                            self.config.reasoning_trace(f"Processing tool call: `{tc_data.get('name', 'unknown')}`\n")
                             tool_name = tc_data.get("name")
                             if not tool_name:
                                 continue
@@ -612,7 +719,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                             full_function_def = next((f for f in all_functions if f['name'] == tool_name), None)
 
                             if not full_function_def:
-                                error_content = f"<error>Error calling tool {tool_name}: Tool not found.</error>"
+                                error_content = f"<error>Error calling tool `{tool_name}`: Tool not found.</error>"
                                 self.config.reasoning_trace(f"{error_content}\n")
                                 conversation.append(
                                     {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -624,7 +731,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                             )
 
                             if "error" in tool_args:
-                                error_content = f"<error>Error calling tool {tool_name}: {tool_args['error']} Raw response: {tool_args['raw_response']}</error>"
+                                error_content = f"<error>Error calling tool `{tool_name}`: {tool_args['error']} Raw response: {tool_args['raw_response']}</error>"
                                 self.config.reasoning_trace(f"{error_content}\n")
                                 conversation.append(
                                     {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -635,7 +742,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                             required_params = schema.get("required", [])
                             missing_params = [p for p in required_params if p not in tool_args]
                             if missing_params:
-                                error_content = f"<error>Error calling tool {tool_name}: Missing required parameters after generation: {', '.join(missing_params)}</error>"
+                                error_content = f"<error>Error calling tool `{tool_name}`: Missing required parameters after generation: {', '.join(missing_params)}</error>"
                                 self.config.reasoning_trace(f"{error_content}\n")
                                 conversation.append(
                                     {"role": "user", "content": f"<tool_output>\n{error_content}\n</tool_output>"})
@@ -656,7 +763,7 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                                 tool_span.set_attribute("tool.name", tool_name)
                                 tool_span.set_attribute("tool.args", json.dumps(tool_args)[:512])
                                 
-                                result = await process_tool_call_func(fake_tc, servers, quiet_mode)
+                                result = await process_tool_call_func(fake_tc, servers, quiet_mode, session_id=self.config.session_id)
 
                                 if isinstance(result, dict):
                                     tool_span.set_attribute("tool.success", "error" not in result)
@@ -664,85 +771,31 @@ Your output must strictly follow below topic with NO ADDITIONAL topics:
                                         tool_span.set_attribute("tool.output_length", len(result["content"]))
 
                             if result and 'content' in result:
-                                self.config.reasoning_trace(f"Tool call output: {result['content']}\n")
+                                self.config.reasoning_trace(f"Tool call output: \n```\n{result['content']}\n```\n")
                                 conversation.append({"role": "user", "content": f"<tool_output>\n{result['content']}\n</tool_output>"})
                     
                         # Close thinking tags before continuing to next iteration
-                        self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
+                        self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
                         continue
 
-                    # Execute Python code if present
-                    code_blocks = extract_code_blocks(assistant_text)
-                    code_outputs = []
+                    self.config.reasoning_trace(f"{assistant_text}\n")
 
-                    if code_blocks and self.config.enable_code_execution:
-                        logger.info(f"Executing {code_blocks}")
-                        for idx, code in enumerate(code_blocks):
-                            self.config.reasoning_trace(f"Executing code: {code}\n")
-
-                            with _tracer.start_as_current_span(
-                                "dolphin_mcp.reasoning.python_code_execution",
-                                kind=SpanKind.INTERNAL,
-                            ) as py_span:
-                                py_span.set_attribute("reasoning.step_index", i + 1)
-                                py_span.set_attribute("code.block_index", idx)
-                                py_span.set_attribute("code.length", len(code))
-                            
-                                output = python_interpreter(
-                                    code, 
-                                    self.python_context,
-                                    use_docker_sandbox=self.config.use_docker_sandbox,
-                                    session_id=self.config.session_id,
-                                    docker_image_name=self.config.docker_image_name,
-                                    docker_image_tag=self.config.docker_image_tag
-                                )
-                                code_outputs.append(output)
-                                self.config.reasoning_trace(f"Code Output: {output}\n")
-
-                                py_span.set_attribute("code.output_length", len(output))
-
-                    # If we have code outputs, add them to the conversation
-                    if code_outputs:
-                        combined_output = "\n".join(code_outputs)
-                        conversation.append({
-                            "role": "user",
-                            "content": f"<code_output>\n{combined_output}\n</code_output>"
-                        })
-                        # Close thinking tags before continuing to next iteration
-                        self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
-                        continue
-                
                     # If no code and no tool calls, we might be stuck
                     if not code_blocks and not tool_calls:
-                        no_code_output_msg = f"""No code execution or tool calls detected\n"""
+                        no_code_output_msg = """No code execution or tool calls detected\n"""
                         # self.config.reasoning_trace(no_code_output_msg)
                         conversation.append({"role": "user", "content": f"<no_code_output>{no_code_output_msg}</no_code_output>"})
 
-                    conversation.append({"role": "user", "content": f"""Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>"."""})
+                    conversation.append({"role": "user", "content": """Based on the current stage and the plan from human expert, please provide the next step or final answer with "<final_answer>...</final_answer>"."""})
 
-                    self.config.reasoning_trace(f"</thinking_content>\n</thinking_dot>")
-
-                    # Check for final answer
-                    final_answer = extract_final_answer(assistant_text)
-
-                    if final_answer:
-                        self.config.reasoning_trace(f"<final_answer>{final_answer}</final_answer>")
-
-                        return True, f"<final_answer>{final_answer}</final_answer>"
-
-                    ask_question = extract_ask_question(assistant_text)
-
-                    if ask_question:
-                        self.config.reasoning_trace(f"<ask>{ask_question}</ask>")
-
-                        return True, f"<ask>{ask_question}</ask>"
+                    self.config.reasoning_trace("</thinking_content>\n</thinking_dot>")
 
                 except Exception as e:
-                    self.config.reasoning_trace(f"<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</thinking_content>\n</thinking_dot>")
+                    self.config.reasoning_trace(f"\n<error>Error in reasoning iteration {i + 1}: {str(e)}</error>\n</thinking_content>\n</thinking_dot>\n</stepper>")
 
                     return False, f"Error during reasoning: {str(e)}"
         
             # If we reach here, we've hit max iterations without a final answer
-            self.config.reasoning_trace(f"<final_answer>Reached max iterations ({self.config.max_iterations}) without final answer</final_answer>")
+            self.config.reasoning_trace(f"\n</stepper>\n<final_answer>Reached max iterations ({self.config.max_iterations}) without final answer</final_answer>")
 
             return False, f"Process stopped after reaching maximum iterations ({self.config.max_iterations})."

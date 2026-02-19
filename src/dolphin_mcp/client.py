@@ -445,14 +445,14 @@ all_functions: List[Dict], stream: bool = False) -> Union[Dict, AsyncGenerator]:
 
     if provider == "openai":
         if stream:
-            return generate_with_openai(conversation, model_cfg, all_functions, stream=True)
+            return await generate_with_openai(conversation, model_cfg, all_functions, stream=True)
         else:
             return await generate_with_openai(conversation, model_cfg, all_functions, stream=False)
 
     if provider == "msazureopenai":
         try:
             if stream:
-                return generate_with_msazure_openai(conversation, model_cfg, all_functions, stream=True)
+                return await generate_with_msazure_openai(conversation, model_cfg, all_functions, stream=True)
             else:
                 return await generate_with_msazure_openai(conversation, model_cfg, all_functions, stream=False)
         except Exception as e:
@@ -508,13 +508,15 @@ async def log_messages_to_file(messages: List[Dict], functions: List[Dict], log_
     except Exception as e:
         logger.error(f"Error logging messages to {log_path}: {str(e)}")
 
-def process_long_fields(tool_result: Any, max_length: int = 15000) -> Any:
+def process_long_fields(tool_result: Any, max_length: int = 15000, session_id: Optional[str] = None, sandbox_base_dir: str = "/tmp/sandboxes") -> Any:
     """
     Process tool result and replace long string fields with file references.
     
     Args:
-        result: The tool result (can be dict, list, or any JSON-serializable value)
+        tool_result: The tool result (can be dict, list, or any JSON-serializable value)
         max_length: Maximum length for string fields before writing to file
+        session_id: Optional session ID to write temp files into the sandbox directory
+        sandbox_base_dir: Base directory for sandbox volumes (default: /tmp/sandboxes)
         
     Returns:
         Modified result with long fields replaced by file references
@@ -554,9 +556,18 @@ def process_long_fields(tool_result: Any, max_length: int = 15000) -> Any:
     
     # If we found long fields, write the original result to a temp file
     try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        if session_id:
+            # Write to the session's sandbox directory, aligned with docker_sandbox paths
+            session_dir = os.path.join(sandbox_base_dir, session_id)
+            os.makedirs(session_dir, exist_ok=True)
+            f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, dir=session_dir)
+        else:
+            f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        with f:
             json.dump(result, f, indent=2)
             temp_file_path = f.name
+        # Make the file world-readable so the Docker sandbox user can access it
+        os.chmod(temp_file_path, 0o644)
         
         logger.info(f"Tool response contains long fields, full response written to: {temp_file_path}")
         
@@ -584,7 +595,7 @@ def process_long_fields(tool_result: Any, max_length: int = 15000) -> Any:
         logger.error(f"Error processing long fields: {str(e)}")
         return tool_result
 
-async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode: bool) -> Optional[Dict]:
+async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode: bool, session_id: Optional[str] = None) -> Optional[Dict]:
     """Process a single tool call and return the result"""
     func_name = tc["function"]["name"]
     func_args_str = tc["function"].get("arguments", "{}")
@@ -640,7 +651,7 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
     #     print(json.dumps(result, indent=2))
 
     # Process the result to handle long fields
-    processed_result = process_long_fields(result)
+    processed_result = process_long_fields(result, session_id=session_id)
 
     return {
         "role": "tool",
@@ -875,21 +886,28 @@ class MCPAgent:
             The final answer from the reasoning process
         """
         if not self.quiet_mode:
-            self.reasoning_config.reasoning_trace("<thinking_dot>\n<thinking_title>Planning...</thinking_title>\n<thinking_content>\n")
+            self.reasoning_config.reasoning_trace("<planning>\n<planning_title>Planning...</planning_title>\n<planning_content>")
 
-        # Generate initial plan
+        # Generate initial plan (will stream chunks via reasoning_trace if stream=True)
         initial_plan = await self.reasoner.generate_plan(
             user_query,
             guidelines,
             generate_text,
             self.chosen_model,
             self.all_functions,
+            self.stream,
+            self.quiet_mode,
         )
         
         if not self.quiet_mode:
-            log_planning = f"""<plan>{initial_plan}</plan>\n</thinking_content>\n</thinking_dot>"""
-            self.reasoning_config.reasoning_trace(log_planning)
-            # self.reasoning_config.reasoning_trace("Starting execution...")
+            # If streaming, close the <planning_content> tag after generating
+            if self.stream:
+                self.reasoning_config.reasoning_trace("</planning_content>")
+            else:
+                # If not streaming, send the full plan with tags
+                self.reasoning_config.reasoning_trace(f"{initial_plan}</planning_content>")
+            
+            self.reasoning_config.reasoning_trace("\n</planning>\n")
         
         # Execute the reasoning loop
         success, result = await self.reasoner.execute_reasoning_loop(
@@ -928,7 +946,7 @@ class MCPAgent:
         # Determine if we should use reasoning mode
         should_use_reasoning = use_reasoning if use_reasoning is not None else self.reasoning_config.enable_planning
         
-        if should_use_reasoning and not self.stream:
+        if should_use_reasoning:
             # Use the new multi-step reasoning approach
             return await self.prompt_with_reasoning(user_query, guidelines)
         else:
@@ -987,7 +1005,7 @@ class MCPAgent:
                                     # Process each tool call
                                     for tc in tool_calls:
                                         if tc.get("function", {}).get("name"):
-                                            result = await process_tool_call(tc, self.servers, self.quiet_mode)
+                                            result = await process_tool_call(tc, self.servers, self.quiet_mode, session_id=getattr(self.reasoning_config, 'session_id', None))
                                             if result:
                                                 self.conversation.append(result)
                                                 tool_calls_processed = True
@@ -1023,7 +1041,7 @@ class MCPAgent:
                         break
 
                     for tc in tool_calls:
-                        result = await process_tool_call(tc, self.servers, self.quiet_mode)
+                        result = await process_tool_call(tc, self.servers, self.quiet_mode, session_id=getattr(self.reasoning_config, 'session_id', None))
                         if result:
                             self.conversation.append(result)
                             logger.info(f"Added tool result: {json.dumps(result, indent=2)}")
