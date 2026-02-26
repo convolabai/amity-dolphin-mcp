@@ -610,7 +610,7 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
             "role": "tool",
             "tool_call_id": tc["id"],
             "name": func_name,
-            "content": json.dumps({"error": "Invalid function name format"})
+            "content": json.dumps({"error": "Invalid function name format"}, ensure_ascii=False)
         }
 
     srv_name, tool_name = parts
@@ -624,7 +624,7 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
             "role": "tool",
             "tool_call_id": tc["id"],
             "name": func_name,
-            "content": json.dumps({"error": f"Unknown server: {srv_name}"})
+            "content": json.dumps({"error": f"Unknown server: {srv_name}"}, ensure_ascii=False)
         }
 
     # Get the tool's schema
@@ -643,7 +643,7 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
                     "role": "tool",
                     "tool_call_id": tc["id"],
                     "name": func_name,
-                    "content": json.dumps({"error": f"Missing required parameter: {param}"})
+                    "content": json.dumps({"error": f"Missing required parameter: {param}"}, ensure_ascii=False)
                 }
 
     result = await servers[srv_name].call_tool(tool_name, func_args)
@@ -657,7 +657,7 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
         "role": "tool",
         "tool_call_id": tc["id"],
         "name": func_name,
-        "content": json.dumps(processed_result)
+        "content": json.dumps(processed_result, ensure_ascii=False)
     }
 
 
