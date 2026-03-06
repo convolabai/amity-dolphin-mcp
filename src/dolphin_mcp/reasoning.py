@@ -440,7 +440,6 @@ class MultiStepReasoner:
         """
         Asks the LLM to generate arguments for a tool call.
         """
-        self.config.reasoning_trace(f"Asking LLM to generate arguments for tool: `{tool_name}`\n\n")
 
         prompt_content = f"""You have decided to call the tool `{tool_name}`.
 Based on the conversation history, please provide the arguments for this tool.
@@ -460,14 +459,14 @@ Please provide *only* the JSON object for the arguments, without any other text 
         args_result = await generate_func(args_conversation, model_cfg, [], stream=False)
         args_text = args_result.get("assistant_text", "").strip()
 
-        self.config.reasoning_trace(f"LLM generated arguments: \n```\n{args_text}\n```\n\n")
-
         # Parse the arguments
         try:
             # The model might return the JSON inside a code block.
             match = re.search(r'```(json)?\s*(.*?)\s*```', args_text, re.DOTALL)
             if match:
                 args_text = match.group(2)
+
+            self.config.reasoning_trace(f"LLM generated arguments: \n```\n{args_text}\n```\n\n")
 
             parsed_args = json.loads(args_text)
             if not isinstance(parsed_args, dict):
